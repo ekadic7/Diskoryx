@@ -40,6 +40,7 @@ function loadMain(scanFolder, scanMftVolume = async () => null, overrides = {}) 
       if (name === 'electron') return {
         app: {
           isPackaged: false, getPath: () => root, setPath() {},
+          setAppUserModelId() {},
           whenReady: () => ({ then() {} }), on: (name, fn) => appEvents.set(name, fn)
         },
         ipcMain: { handle: (name, fn) => handlers.set(name, fn) }

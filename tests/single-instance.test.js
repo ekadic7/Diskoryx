@@ -17,9 +17,10 @@ test('another launch exits without opening a second window; existing minimized w
     let quits = 0;
     let focuses = 0;
     let restores = 0;
+    let appUserModelId;
     let existing;
     class Window {
-      constructor() { windows++; existing = this; }
+      constructor(options) { windows++; existing = this; this.options = options; }
       loadFile() {}
       isDestroyed() { return false; }
       isMinimized() { return true; }
@@ -33,6 +34,7 @@ test('another launch exits without opening a second window; existing minimized w
         if (name === 'electron') return {
           app: {
             getPath: () => appData, setPath() {},
+            setAppUserModelId(id) { appUserModelId = id; },
             requestSingleInstanceLock: () => owns, quit() { quits++; },
             on: (name, fn) => events.set(name, fn),
             whenReady: () => ({ then: fn => fn() })
@@ -47,6 +49,8 @@ test('another launch exits without opening a second window; existing minimized w
     assert.equal(windows, owns ? 1 : 0);
     assert.equal(quits, owns ? 0 : 1);
     if (owns) {
+      assert.equal(appUserModelId, 'com.diskoryx.desktop');
+      assert.equal(existing.options.icon, path.join(root, '..', 'assets', 'diskoryx.ico'));
       events.get('second-instance')();
       assert.equal(focuses, 1);
       assert.equal(restores, 1);

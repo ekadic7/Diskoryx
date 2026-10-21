@@ -27,6 +27,7 @@ const { reconcilePaths } = require('./live-reconcile');
 const { migrateUserData } = require('./user-data-migration');
 const requestRecycleConfirmation = createRecycleConfirmation(ipcMain);
 
+const APP_ICON = path.join(__dirname, '..', 'assets', 'diskoryx.ico');
 const PAGE_SIZE = 200;
 const MAX_SORT_CACHE_PER_FOLDER = 3;
 let cachedScan = null;
@@ -74,6 +75,7 @@ const liveMonitor = createLiveMonitor({
 });
 
 const ownsInstance = typeof app.requestSingleInstanceLock !== 'function' || app.requestSingleInstanceLock();
+if (process.platform === 'win32') app.setAppUserModelId('com.diskoryx.desktop');
 if (!ownsInstance) app.quit();
 const appDataPath = app.getPath('appData');
 const userDataPath = path.join(appDataPath, 'Diskoryx V1');
@@ -100,6 +102,7 @@ function createWindow() {
     height: 980,
     minWidth: 1100,
     minHeight: 600,
+    icon: APP_ICON,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -115,7 +118,7 @@ function createWindow() {
 function showStartupError(message) {
   const win = new BrowserWindow({
     width: 680, height: 420, minWidth: 480, minHeight: 320,
-    resizable: true, backgroundColor: '#101116',
+    resizable: true, backgroundColor: '#101116', icon: APP_ICON,
     webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true }
   });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'startup-error.html'), {

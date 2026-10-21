@@ -28,7 +28,7 @@ function loadMain(directory, confirmation, recycle, saveDialog, overrides = {}) 
     __dirname: appRoot, process, console: { ...console, warn() {} }, setImmediate, AbortController,
     require(name) {
       if (name === 'electron') return {
-        app: { getPath: () => directory, setPath() {}, whenReady: () => ({ then() {} }), on() {} },
+        app: { getPath: () => directory, setPath() {}, setAppUserModelId() {}, whenReady: () => ({ then() {} }), on() {} },
         BrowserWindow: { fromWebContents: () => ({}) },
         ipcMain: { handle(name, fn) {
           assert.equal(handlers.has(name), false, `IPC handler registered twice: ${name}`);

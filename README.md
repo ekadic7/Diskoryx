@@ -28,6 +28,8 @@ This builds the ordinary-user file-action helper and scan broker, verifies that 
 
 The installer includes the MFT scanner and both native helpers as Electron resources. Build-time output and helper executables are ignored by Git; the pinned MFT scanner binary is included in the repository so a clean checkout can package the same approved scanner image. The Rust source and lockfile are retained for reference, but rebuilding the MFT binary is not part of the V1 installer build.
 
+Diskoryx's Windows executable, shortcuts, and app/taskbar window use the bundled icon in `src/assets/diskoryx.ico`.
+
 ## Project layout
 
 ```text

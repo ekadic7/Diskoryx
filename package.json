@@ -46,6 +46,7 @@
       }
     ],
     "win": {
+      "icon": "src/assets/diskoryx.ico",
       "target": [
         {
           "target": "nsis",

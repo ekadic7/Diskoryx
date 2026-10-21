@@ -39,6 +39,19 @@ test('all renderer scripts/styles and bundled font files resolve locally', () =>
   }
 });
 
+test('Windows app and taskbar use the bundled Diskoryx icon', () => {
+  const pkg = require('../package.json');
+  const icon = path.join(root, 'src', 'assets', 'diskoryx.ico');
+  const iconBytes = fs.readFileSync(icon);
+  assert.equal(pkg.build.win.icon, 'src/assets/diskoryx.ico');
+  assert.equal(iconBytes.readUInt16LE(0), 0);
+  assert.equal(iconBytes.readUInt16LE(2), 1);
+  assert(iconBytes.readUInt16LE(4) > 0, 'ICO must contain at least one image');
+  const main = fs.readFileSync(path.join(root, 'src', 'main', 'main.js'), 'utf8');
+  assert.match(main, /setAppUserModelId\('com\.diskoryx\.desktop'\)/);
+  assert.equal((main.match(/icon: APP_ICON/g) || []).length, 2);
+});
+
 test('Explorer location and scan controls are grouped and Create folder is a context action', () => {
   const html = fs.readFileSync(renderer, 'utf8');
   assert.match(html, /class="explorer-header-controls"[\s\S]*id="saved-scans-select"[\s\S]*class="sort-controls"/);

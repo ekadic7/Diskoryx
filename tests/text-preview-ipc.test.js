@@ -19,7 +19,7 @@ test('preview IPC requires active scan membership and rejects stale scan IDs', a
     __dirname: mainRoot, process, console, setImmediate, AbortController,
     require(name) {
       if (name === 'electron') return {
-        app: { isPackaged: false, getPath: () => root, setPath() {}, whenReady: () => ({ then() {} }), on() {} },
+        app: { isPackaged: false, getPath: () => root, setPath() {}, setAppUserModelId() {}, whenReady: () => ({ then() {} }), on() {} },
         ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) }
       };
       return rootRequire(name);
