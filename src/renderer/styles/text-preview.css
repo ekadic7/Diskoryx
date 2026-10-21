@@ -1,0 +1,24 @@
+.open-text-preview { display: block; width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #a7a0ff40; border-radius: 8px; background: var(--accent-soft); color: var(--accent-strong); font-size: 11px; }
+.open-text-preview:hover { background: var(--surface-hover); }
+#text-preview-dialog { width: min(1180px, calc(100vw - 70px)); height: min(820px, calc(100vh - 70px)); max-width: none; max-height: none; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); color: var(--text); box-shadow: 0 24px 90px #0008; overflow: hidden; }
+#text-preview-dialog[open] { display: flex; flex-direction: column; }
+#text-preview-dialog::backdrop { background: #080910a6; backdrop-filter: blur(6px); }
+.preview-header { display: flex; flex-shrink: 0; align-items: flex-start; gap: 20px; padding: 22px 24px 16px; border-bottom: 1px solid var(--line); }
+.preview-heading { flex: 1; min-width: 0; }
+.preview-heading h2 { margin: 7px 0 6px; font-size: 20px; font-weight: 550; overflow-wrap: anywhere; }
+#text-preview-path { margin: 0; color: var(--muted); font-size: 11px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#text-preview-dialog button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 31px; padding: 0 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface-raised); color: var(--text); font-size: 11px; }
+#text-preview-dialog button:hover:not(:disabled) { background: var(--surface-hover); }
+#text-preview-dialog button:disabled { cursor: not-allowed; }
+#text-preview-close { width: 31px; padding: 0 !important; }
+.preview-tools { display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: center; gap: 12px; padding: 12px 24px; border-bottom: 1px solid var(--line); }
+.preview-navigation { display: flex; gap: 5px; }
+#preview-page-form { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; }
+#preview-page-number { width: 76px; min-height: 31px; padding: 0 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--page); color: var(--text); }
+.preview-wrap { display: flex; align-items: center; gap: 5px; margin-left: auto; color: var(--muted); font-size: 11px; }
+.preview-wrap input { accent-color: var(--accent); }
+#preview-status { margin: 0; padding: 10px 24px; color: var(--muted); font-size: 11px; flex-shrink: 0; }
+#preview-status.is-error { color: #f39d9d; }
+#preview-content { flex: 1; min-height: 0; margin: 0 16px; padding: 16px; overflow: auto; border: 1px solid var(--line); border-radius: 9px; background: var(--page); color: var(--text); font-family: "Cascadia Code", Consolas, monospace; font-size: 12px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 4; user-select: text; }
+#preview-content.no-wrap { white-space: pre; overflow-wrap: normal; }
+.preview-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; flex-shrink: 0; padding: 12px 24px; color: var(--muted); font-size: 10px; }

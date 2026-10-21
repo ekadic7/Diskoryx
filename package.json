@@ -1,0 +1,70 @@
+{
+  "name": "diskoryx",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test",
+    "test:smoke": "node scripts/smoke.cjs",
+    "build:file-actions": "node scripts/build-file-actions.cjs",
+    "build:scan-broker": "node scripts/build-scan-broker.cjs",
+    "build:installer:win": "npm run build:file-actions && npm run build:scan-broker && node scripts/check-installer-inputs.cjs && node scripts/build-installer.cjs"
+  },
+  "devDependencies": {
+    "electron": "^44.7.2",
+    "electron-builder": "^26.15.3"
+  },
+  "dependencies": {
+    "@fortawesome/fontawesome-free": "6.5.1",
+    "d3-hierarchy": "^3.1.2"
+  },
+  "build": {
+    "appId": "com.diskoryx.desktop",
+    "productName": "Diskoryx",
+    "asar": true,
+    "directories": {
+      "output": "Installation files/.build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "native/mft-scanner/bin/diskoryx-mft-scanner.exe",
+        "to": "diskoryx-mft-scanner.exe"
+      },
+      {
+        "from": "native/file-actions/bin/diskoryx-file-actions.exe",
+        "to": "native/file-actions/bin/diskoryx-file-actions.exe"
+      },
+      {
+        "from": "native/scan-broker/bin/diskoryx-scan-broker.exe",
+        "to": "native/scan-broker/bin/diskoryx-scan-broker.exe"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "Diskoryx-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Diskoryx",
+      "deleteAppDataOnUninstall": false
+    }
+  }
+}

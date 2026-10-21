@@ -1,0 +1,6 @@
+body { display: grid; grid-template-columns: 1fr; align-content: center; min-height: 100vh; margin: 0; padding: 20px; overflow: auto; background: var(--page); }
+.startup-card { border: 1px solid var(--line); border-radius: 15px; background: var(--surface); }
+#startup-title { margin: 0; font-size: 20px; }
+#startup-message { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.startup-note { margin: 0; color: var(--muted); line-height: 1.7; }
+#startup-close { background: var(--accent); color: var(--page); border-color: var(--accent); }

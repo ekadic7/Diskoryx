@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>Diskoryx - Startup</title>
+  <link rel="stylesheet" href="../../node_modules/@fortawesome/fontawesome-free/css/all.min.css">
+  <link rel="stylesheet" href="styles/style.css">
+  <link rel="stylesheet" href="styles/design.css">
+  <link rel="stylesheet" href="styles/startup.css">
+</head>
+<body>
+  <main class="startup-card recycle-body" aria-labelledby="startup-title">
+    <span class="recycle-symbol"><i class="fas fa-circle-info" aria-hidden="true"></i></span>
+    <span class="eyebrow">DISKORYX STARTUP</span>
+    <h1 id="startup-title">Unable to start Diskoryx</h1>
+    <p id="startup-message" role="alert"></p>
+    <p class="startup-note">For normal use, open PowerShell without “Run as administrator”, then run <code>npm start</code> in the redesign folder. Only the first drive scan requests Windows UAC.</p>
+    <div class="rename-actions"><button id="startup-close" type="button" autofocus>Close</button></div>
+  </main>
+  <script src="startup-error.js"></script>
+</body>
+</html>

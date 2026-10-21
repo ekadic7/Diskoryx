@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diskoryx</title>
+  
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="../../node_modules/@fortawesome/fontawesome-free/css/all.min.css">
+  
+  <!-- Our CSS -->
+  <link rel="stylesheet" href="styles/style.css">
+  <link rel="stylesheet" href="styles/design.css">
+  <link rel="stylesheet" href="styles/text-preview.css">
+</head>
+<body>
+  <aside class="sidebar" aria-label="Workspace navigation">
+    <div class="sidebar-brand">
+      <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+      <strong>Diskoryx<span>Space, understood.</span></strong>
+    </div>
+    <span class="sidebar-label">WORKSPACE</span>
+    <button class="nav-item is-active" type="button" data-view="explorer" aria-pressed="true"><i class="fas fa-layer-group" aria-hidden="true"></i> Disk overview</button>
+    <button class="nav-item" type="button" data-view="largest" aria-pressed="false"><i class="fas fa-file" aria-hidden="true"></i> Largest files</button>
+    <button class="nav-item" type="button" data-view="types" aria-pressed="false"><i class="fas fa-chart-pie" aria-hidden="true"></i> File types</button>
+    <button id="history-btn" class="nav-item" type="button"><i class="fas fa-clock-rotate-left" aria-hidden="true"></i> History</button>
+    <div class="sidebar-heading"><span class="sidebar-label">SCAN LOCATION</span><i class="fas fa-hard-drive" aria-hidden="true"></i></div>
+    <div class="location-card">
+      <label>Scan locations</label>
+      <div class="drive-controls">
+        <select id="drive-select" title="Select drive" aria-label="Select drive" hidden><option value="">Select a drive...</option></select>
+        <button id="choose-drives-btn" type="button"><i class="fas fa-hard-drive" aria-hidden="true"></i> Choose drives</button>
+        <button id="scan-filters-btn" type="button" title="Scan filters" aria-label="Scan filters"><i class="fas fa-sliders" aria-hidden="true"></i></button>
+      </div>
+      <span id="drive-selection-summary" role="status" hidden></span>
+      <button id="scan-drive-btn" type="button" disabled><i class="fas fa-play" aria-hidden="true"></i> Scan drive</button>
+      <button id="stop-scan-btn" type="button" hidden>Stop scan</button>
+      <button id="folder-picker-btn" type="button"><i class="far fa-folder-open" aria-hidden="true"></i> Browse a folder</button>
+    </div>
+    <div class="sidebar-tip"><i class="fas fa-shield-halved" aria-hidden="true"></i><div><strong>Local by design</strong><p>Your files stay on your device. Nothing is uploaded.</p></div></div>
+    <div class="sidebar-bottom">
+      <section id="disk-capacity-card" class="disk-capacity-card" hidden aria-label="Current drive capacity">
+        <div class="disk-capacity-heading"><i class="fas fa-hard-drive" aria-hidden="true"></i><span>Free space</span><strong id="capacity-volume"></strong></div>
+        <strong id="capacity-free">Checking...</strong>
+        <span id="capacity-total">Available on this volume</span>
+        <div id="capacity-track" role="progressbar" aria-label="Drive space used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <span id="capacity-fill"></span>
+        </div>
+      </section>
+      <button id="theme-toggle" class="nav-item" type="button" aria-label="Switch to light theme"><i class="fas fa-circle-half-stroke" aria-hidden="true"></i><span>Light appearance</span></button>
+    </div>
+  </aside>
+  <div class="workspace">
+  <header class="app-header">
+    <div class="header-left">
+      <span class="eyebrow">YOUR STORAGE, AT A GLANCE</span>
+      <h1>Disk overview</h1>
+    </div>
+    
+    <div class="header-center">
+      <i class="fas fa-search search-icon" aria-hidden="true"></i>
+      <input type="text" id="search-input" placeholder="Find a file in this scan..." autocomplete="off" aria-label="Search scanned files">
+      <kbd>Ctrl K</kbd>
+      <button id="search-btn" title="Search" aria-label="Search"><i class="fas fa-arrow-right" aria-hidden="true"></i></button>
+    </div>
+    
+    <div class="header-right">
+      <button id="refresh-btn" title="Rescan location" aria-label="Rescan location"><i class="fas fa-rotate" aria-hidden="true"></i></button>
+      <button id="export-csv-btn" type="button" title="Export the complete tree of the selected scan to CSV" disabled><i class="fas fa-arrow-up-from-bracket" aria-hidden="true"></i> Export</button>
+      <button id="inspector-toggle" type="button" title="Toggle inspector" aria-label="Toggle inspector" aria-expanded="true"><i class="fas fa-table-columns" aria-hidden="true"></i></button>
+    </div>
+  </header>
+
+  <section class="scan-overview" aria-label="Scan overview">
+    <div class="location-line"><span><i class="fas fa-hard-drive" aria-hidden="true"></i><span id="location-label">No location selected</span></span><span class="local-tag"><span></span> On-device analysis</span></div>
+    <div class="metric-grid">
+      <article class="metric-card featured"><div class="metric-label"><i class="fas fa-chart-pie" aria-hidden="true"></i> Scanned size</div><strong id="metric-size">--</strong><span>Logical file size</span><div class="metric-decoration" aria-hidden="true"></div></article>
+      <article class="metric-card"><div class="metric-label"><i class="far fa-file" aria-hidden="true"></i> Files discovered</div><strong id="metric-files">--</strong><span id="metric-folders">Choose a drive to begin</span></article>
+      <article class="metric-card"><div class="metric-label"><i class="fas fa-stopwatch" aria-hidden="true"></i> Scan duration</div><strong id="metric-duration">--</strong><span id="metric-rate">Measured after scanning</span></article>
+      <article class="metric-card"><div class="metric-label"><i class="fas fa-filter" aria-hidden="true"></i> Scan coverage</div><strong id="metric-skipped">--</strong><span id="metric-coverage">Skipped entries</span></article>
+    </div>
+  </section>
+  <section id="analysis-panel" class="analysis-panel" hidden aria-labelledby="analysis-title">
+    <div class="section-header"><h2 id="analysis-title">Largest files</h2><span id="analysis-count" role="status"></span></div>
+    <form id="analysis-filters" class="analysis-filters">
+      <label>Search path<input id="analysis-query" type="search" maxlength="512" placeholder="Name or path"></label>
+      <label id="analysis-min-label">Minimum size (MiB)<input id="analysis-min" type="number" value="0" min="0" step="any"></label>
+      <label>Order<select id="analysis-order"><option value="size">Size descending</option><option value="name">Name</option><option value="date">Modified newest</option></select></label>
+      <button type="submit">Apply</button><button id="analysis-reset" type="button">Reset</button>
+    </form>
+    <p id="analysis-note">Logical file sizes. Hard-link aliases are listed separately; counted bytes are deduplicated as recorded by the scanner.</p>
+    <p id="analysis-error" role="alert" hidden></p>
+    <div id="largest-chart" class="largest-chart" aria-label="Largest files on this page, relative logical sizes" hidden></div>
+    <div class="analysis-scroll"><table class="analysis-table"><thead id="analysis-head"></thead><tbody id="analysis-rows"></tbody></table></div>
+    <button id="analysis-more" type="button" hidden>Load next 100</button>
+  </section>
+  <!-- Main Content Area -->
+  <main class="app-content">
+    <!-- Tree View Section -->
+    <section class="tree-section">
+      <div class="section-header">
+        <h2><span class="heading-dot"></span><span>Storage explorer</span></h2>
+        <div class="explorer-header-controls">
+          <div id="saved-scans-card" class="explorer-locations">
+            <label for="saved-scans-select">Location</label>
+            <select id="saved-scans-select" aria-label="Open scanned location"></select>
+            <span id="transfer-selection" role="status" hidden></span>
+            <button id="choose-destination" type="button" hidden>Choose destination...</button>
+            <button id="clear-transfer" type="button" hidden>Cancel selection</button>
+          </div>
+          <div class="sort-controls">
+            <select id="sort-select" title="Sort by">
+              <option value="name">Name</option>
+              <option value="size">Size</option>
+              <option value="date">Modified date</option>
+            </select>
+            <span id="stats-badge" class="stats-badge">Loading...</span>
+            <span id="scan-mode" class="scan-mode" role="status" hidden></span>
+          </div>
+        </div>
+      </div>
+      
+      <div class="explorer-panes">
+        <section class="tree-pane">
+          <div class="explorer-pane-header">
+            <h3 id="tree-title"><i class="fas fa-folder-tree"></i><span>File Structure</span></h3>
+            <div class="tree-actions">
+            <button id="expand-all-btn" type="button" title="Expand loaded folders" aria-label="Expand loaded folders"><i class="fas fa-expand" aria-hidden="true"></i></button>
+            <button id="collapse-all-btn" type="button" title="Collapse loaded folders" aria-label="Collapse loaded folders"><i class="fas fa-compress" aria-hidden="true"></i></button>
+            <button id="collapse-tree-folders-btn" class="tree-pane-action" type="button" title="Collapse expanded folders">
+              <i class="fas fa-angles-up" aria-hidden="true"></i>
+            </button>
+            </div>
+          </div>
+          <div class="table-head" aria-hidden="true"><span>Name</span><span>Size</span><span id="share-column-label">Of parent</span></div>
+          <div id="file-tree" class="tree-container">
+            <div class="loading-state">
+              <i class="fas fa-hard-drive fa-3x" aria-hidden="true"></i>
+              <p>Your next clear view starts here.</p>
+            </div>
+          </div>
+        </section>
+        <div id="pane-divider" role="separator" aria-label="Resize file table and space map" aria-orientation="vertical" aria-valuemin="35" aria-valuemax="70" aria-valuenow="52" tabindex="0"></div>
+        <section id="treemap-panel" class="treemap-panel">
+          <div class="explorer-pane-header">
+            <h3><i class="fas fa-border-all"></i> Space map</h3><span class="panel-caption">Size, made visible</span>
+          </div>
+          <div class="treemap-toolbar">
+            <nav id="treemap-breadcrumb" class="treemap-breadcrumb" aria-label="Treemap location"></nav>
+            <button id="treemap-small-items-btn" class="treemap-small-items-control" type="button" hidden></button>
+          </div>
+          <div id="treemap-canvas" class="treemap-canvas"><div class="map-empty"><div class="map-illustration" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div><strong>A bigger picture of your files</strong><p>Scan a location to see what takes up space.</p></div></div>
+        </section>
+      </div>
+    </section>
+
+    <!-- File Details Panel -->
+    <section id="file-details" class="details-section">
+      <div class="section-header">
+        <h2><i class="fas fa-circle-info"></i> Inspector</h2>
+        <button id="close-details" title="Close">×</button>
+      </div>
+      
+      <!-- Empty state (shown until file selected) -->
+      <div class="empty-state">
+        <div class="inspector-symbol"><i class="far fa-file" aria-hidden="true"></i></div>
+        <strong>The details matter.</strong>
+        <p>Select a file to inspect its size, location, and properties.</p>
+      </div>
+    </section>
+  </main>
+  <footer class="app-footer">
+    <span id="theme-status"><span class="status-dot"></span> Ready to explore</span>
+    <span id="files-loaded">Files loaded: -</span>
+    <span id="last-updated">Last updated: --</span>
+  </footer>
+  </div>
+
+  <div id="file-context-menu" class="file-context-menu" role="menu" hidden>
+    <button type="button" role="menuitem" data-file-action="copy-path"><i class="fas fa-copy"></i> Copy Path</button>
+    <button type="button" role="menuitem" data-file-action="copy"><i class="fas fa-copy"></i> Copy file / folder</button>
+    <button type="button" role="menuitem" data-file-action="move"><i class="fas fa-scissors"></i> Move file / folder</button>
+    <button type="button" role="menuitem" data-file-action="create-folder" hidden><i class="fas fa-folder-plus"></i> Create folder inside</button>
+    <button type="button" role="menuitem" data-file-action="paste" hidden disabled><i class="fas fa-paste"></i> Paste into this folder</button>
+    <button type="button" role="menuitem" data-file-action="reveal"><i class="fas fa-folder-open"></i> Open in Explorer</button>
+    <button type="button" role="menuitem" data-file-action="rename"><i class="fas fa-pen"></i> Rename</button>
+    <button type="button" role="menuitem" data-file-action="delete"><i class="fas fa-trash-can"></i> Move to Recycle Bin</button>
+  </div>
+
+  <div id="action-toast" class="action-toast" role="status" aria-live="polite" hidden></div>
+
+  <dialog id="history-dialog" aria-labelledby="history-title">
+    <header class="section-header"><h2 id="history-title">Action history</h2><form method="dialog"><button id="history-close" autofocus>Close</button></form></header>
+    <p>Recent file actions, saved only on this device. Restore never overwrites an existing item.</p>
+    <details class="history-help"><summary>How restore and Undo work</summary><p>Restore from Recycle Bin finds the exact item deleted by Diskoryx. Undo copy recycles only an unchanged copy; the original stays intact. Redo copy makes a fresh copy from the current original. Move records offer Return to original location and Redo move; changed items or parents are refused. Up to 500 actions are retained.</p></details>
+    <p id="history-status" role="status"></p>
+    <div class="analysis-scroll"><table class="analysis-table history-table"><colgroup><col class="history-time-col"><col class="history-kind-col"><col><col class="history-action-col"></colgroup><thead><tr><th>When</th><th>Action</th><th>Item and location</th><th>Status / action</th></tr></thead><tbody id="history-rows"></tbody></table></div>
+  </dialog>
+
+  <dialog id="destination-dialog" class="rename-dialog" aria-labelledby="destination-title" aria-describedby="destination-help">
+    <h2 id="destination-title">Choose destination folder</h2>
+    <p id="destination-source"></p>
+    <p id="destination-help">Choose a scanned location, then open folders below. The full destination path is shown before you confirm. Nothing transfers until you confirm.</p>
+    <label for="destination-location">Scanned disk / location</label>
+    <select id="destination-location"></select>
+    <p class="destination-note">Only scanned locations are available. To add another, cancel and scan that disk or use Browse a folder; your selection is kept.</p>
+    <div class="destination-navigation"><button id="destination-up" type="button">Up one folder</button><strong id="destination-path" aria-label="Selected destination folder"></strong><button id="destination-create-folder" type="button">New folder</button></div>
+    <p id="destination-status" role="status"></p>
+    <div id="destination-folders" aria-label="Destination subfolders"></div>
+    <button id="destination-more" type="button" hidden>Show more folders</button>
+    <p id="destination-error" role="alert" hidden></p>
+    <div class="rename-actions"><button id="destination-cancel" type="button">Cancel</button><button id="destination-confirm" type="button" disabled>Copy here</button></div>
+  </dialog>
+
+  <dialog id="copy-dialog" class="rename-dialog recycle-dialog" aria-labelledby="copy-title">
+    <div class="recycle-body"><span class="eyebrow">DISKORYX</span><h2 id="copy-title">Transfer file / folder</h2>
+      <p id="copy-status" role="status">Preparing transfer...</p>
+      <p>Copy keeps the original. Move changes its location; cross-drive moves verify file contents before removing the source. Existing names are never overwritten. Maximum 4096 entries per operation.</p>
+      <div class="rename-actions"><button id="copy-cancel" type="button">Cancel transfer</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="text-preview-dialog" aria-labelledby="text-preview-title">
+    <header class="preview-header">
+      <div class="preview-heading"><span class="eyebrow">READ-ONLY FILE PREVIEW</span><h2 id="text-preview-title">File preview</h2><p id="text-preview-path"></p></div>
+      <button id="text-preview-close" type="button" aria-label="Close file preview"><i class="fas fa-xmark" aria-hidden="true"></i></button>
+    </header>
+    <div class="preview-tools">
+      <div class="preview-navigation" role="group" aria-label="Preview page navigation">
+        <button id="preview-first" type="button" title="First page" aria-label="First page"><i class="fas fa-backward-step" aria-hidden="true"></i></button>
+        <button id="preview-previous" type="button"><i class="fas fa-chevron-left" aria-hidden="true"></i> Previous</button>
+        <button id="preview-next" type="button">Next <i class="fas fa-chevron-right" aria-hidden="true"></i></button>
+        <button id="preview-last" type="button" title="Last page" aria-label="Last page"><i class="fas fa-forward-step" aria-hidden="true"></i></button>
+      </div>
+      <form id="preview-page-form"><label for="preview-page-number">Page</label><input id="preview-page-number" type="number" min="1" value="1" required aria-label="Page number"><span id="preview-page-count">of 1</span><button type="submit">Go</button></form>
+      <button id="preview-reload" type="button" title="Reload current file"><i class="fas fa-rotate" aria-hidden="true"></i> Reload</button>
+      <label class="preview-wrap"><input id="preview-word-wrap" type="checkbox" checked> Wrap lines</label>
+    </div>
+    <p id="preview-status" role="status" aria-live="polite"></p>
+    <pre id="preview-content" tabindex="0" aria-label="Read-only file content"></pre>
+    <footer class="preview-footer"><span id="preview-position"></span><span>64 KiB per page · All pages accessible · Read-only</span></footer>
+  </dialog>
+
+  <dialog id="recycle-dialog" class="rename-dialog recycle-dialog" aria-labelledby="recycle-title" aria-describedby="recycle-note">
+    <div class="recycle-body">
+      <span class="recycle-symbol"><i class="fas fa-trash-can" aria-hidden="true"></i></span>
+      <span class="eyebrow">FILE ACTION</span>
+      <h2 id="recycle-title">Move to Recycle Bin?</h2>
+      <p id="recycle-path"></p>
+      <p id="recycle-note">This item and any contents will be moved to the Windows Recycle Bin. If recycling fails, nothing will be permanently deleted.</p>
+      <p id="recycle-error" class="rename-error" role="alert" hidden></p>
+      <div class="rename-actions">
+        <button id="recycle-cancel" type="button" autofocus>Cancel</button>
+        <button id="recycle-confirm" type="button"><i class="fas fa-trash-can" aria-hidden="true"></i> Move to Recycle Bin</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="message-dialog" class="rename-dialog recycle-dialog" aria-labelledby="message-title" aria-describedby="message-text">
+    <div class="recycle-body">
+      <span class="recycle-symbol"><i class="fas fa-circle-info" aria-hidden="true"></i></span>
+      <span class="eyebrow">DISKORYX</span>
+      <h2 id="message-title">Unable to complete action</h2>
+      <p id="message-text"></p>
+      <form method="dialog" class="message-actions rename-actions">
+        <button id="message-close" type="submit" autofocus>OK</button>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog id="rename-dialog" class="rename-dialog">
+    <form id="rename-form">
+      <h2>Rename item</h2>
+      <label for="rename-input">New name</label>
+      <input id="rename-input" name="name" type="text" maxlength="255" required>
+      <p id="rename-error" class="rename-error" hidden></p>
+      <div class="rename-actions">
+        <button id="rename-cancel" type="button">Cancel</button>
+        <button type="submit">Rename</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="create-folder-dialog" class="rename-dialog">
+    <form id="create-folder-form">
+      <h2>Create folder</h2>
+      <p id="create-folder-parent"></p>
+      <label for="create-folder-name">New folder name</label>
+      <input id="create-folder-name" name="name" type="text" maxlength="255" required autocomplete="off">
+      <p id="create-folder-error" class="rename-error" role="alert" hidden></p>
+      <div class="rename-actions">
+        <button id="create-folder-cancel" type="button">Cancel</button>
+        <button type="submit">Create folder</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="scan-filters-dialog" class="rename-dialog scan-filters-dialog">
+    <form id="scan-filters-form">
+      <h2>Scan filters</h2>
+      <label for="include-extensions">Include extensions</label>
+      <input id="include-extensions" name="includeExtensions" type="text" placeholder="All extensions">
+      <label for="exclude-extensions">Exclude extensions</label>
+      <input id="exclude-extensions" name="excludeExtensions" type="text" placeholder=".tmp, .log">
+      <label for="exclude-folders">Exclude folder names</label>
+      <input id="exclude-folders" name="excludeFolderNames" type="text" placeholder="node_modules, .git">
+      <p class="scan-filters-note">Extension changes apply to the current scan. Changing excluded folders requires rescanning the disk.</p>
+      <p id="scan-filters-error" class="rename-error" hidden></p>
+      <div class="rename-actions">
+        <button id="reset-scan-filters" type="button">Reset</button>
+        <button id="cancel-scan-filters" type="button">Cancel</button>
+        <button type="submit">Apply Filters</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Footer Status Bar -->
+  <dialog id="choose-drives-dialog" class="rename-dialog">
+    <form id="choose-drives-form">
+      <h2>Choose drives to scan</h2>
+      <p class="scan-filters-note">Scan selected drives in order. Each keeps its own result until Diskoryx closes. Stop also cancels the remaining queue.</p>
+      <div class="rename-actions">
+        <button id="select-all-drives" type="button">Select all</button>
+        <button id="select-no-drives" type="button">Clear</button>
+      </div>
+      <div id="drive-checklist" class="drive-checklist"></div>
+      <div class="rename-actions">
+        <button id="cancel-choose-drives" type="button">Cancel</button>
+        <button type="submit">Use selected drives</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Our JavaScript Logic -->
+  <script src="../../node_modules/d3-hierarchy/dist/d3-hierarchy.min.js"></script>
+  <script src="virtual-tree.js"></script>
+  <script src="treemap.js"></script>
+  <script src="app.js"></script>
+  <script src="drive-scans.js"></script>
+  <script src="design.js"></script>
+  <script src="analysis.js"></script>
+  <script src="history.js"></script>
+  <script src="copy.js"></script>
+  <script src="destination.js"></script>
+  <script src="live-updates.js"></script>
+  <script src="text-preview-ui.js"></script>
+  <script src="recycle-confirmation-ui.js"></script>
+</body>
+</html>

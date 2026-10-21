@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diskoryx - Interactive Tree Explorer</title>
+  
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="node_modules/@fortawesome/fontawesome-free/css/all.min.css">
+  
+  <!-- Our CSS -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Header with Title, Search, and Refresh -->
+  <header class="app-header">
+    <div class="header-left">
+      <h1>
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+        Diskoryx
+      </h1>
+      <span class="subtitle">Interactive Tree Explorer 🌳</span>
+      <div class="drive-controls">
+        <select id="drive-select" title="Select drive" aria-label="Select drive">
+          <option value="">Select a drive...</option>
+        </select>
+        <button id="scan-drive-btn" type="button" title="Scan selected drive" disabled>Scan</button>
+        <button id="scan-filters-btn" type="button" title="Scan filters" aria-label="Scan filters"><i class="fas fa-filter"></i></button>
+      </div>
+    </div>
+    
+    <div class="header-center">
+      <input type="text" id="search-input" placeholder="🔍 Search for files..." autocomplete="off">
+      <button id="search-btn" title="Search"><i class="fas fa-search"></i></button>
+    </div>
+    
+    <div class="header-right">
+      <button id="refresh-btn" title="Refresh"><i class="fas fa-sync-alt"></i></button>
+      <button id="export-csv-btn" type="button" title="Export the complete tree of the selected scan to CSV" aria-label="Export scan tree to CSV" disabled><i class="fas fa-file-csv"></i></button>
+      <button id="folder-picker-btn" title="Select Folder">
+        <i class="fas fa-folder-open"></i> Browse Folder
+      </button>
+      <button id="expand-all-btn" title="Expand loaded folders"><i class="fas fa-expand-arrows-alt"></i></button>
+      <button id="collapse-all-btn" title="Collapse loaded folders"><i class="fas fa-compress-arrows-alt"></i></button>
+    </div>
+  </header>
+
+  <!-- Main Content Area -->
+  <main class="app-content">
+    <!-- Tree View Section -->
+    <section class="tree-section">
+      <div class="section-header">
+        <h2><i class="fas fa-hard-drive"></i><span>Disk Explorer</span></h2>
+        <div class="sort-controls">
+          <select id="sort-select" title="Sort by">
+            <option value="name">🅰 Name</option>
+            <option value="size">📊 Size</option>
+            <option value="largest">Largest files (Top 100)</option>
+            <option value="date">🕐 Date</option>
+            <option value="age">⏳ Age</option>
+          </select>
+          
+          <select id="filter-select" title="Filter by extension">
+            <option value="">🔴 No Filter</option>
+            <option value=".jpg,.jpeg">🖼️ Images (.jpg/.jpeg)</option>
+            <option value=".png">🎨 PNG Images (.png)</option>
+            <option value=".pdf">📄 PDF Files (.pdf)</option>
+            <option value=".doc,.docx">📝 Documents (.doc/.docx)</option>
+            <option value=".mp3">🎵 Audio (.mp3)</option>
+            <option value=".mp4,.mkv">🎬 Videos (.mp4/.mkv)</option>
+            <option value=".zip,.rar">📦 Archives (.zip/.rar)</option>
+          </select>
+          
+          <span id="stats-badge" class="stats-badge">Loading...</span>
+        </div>
+      </div>
+      
+      <div class="explorer-panes">
+        <section class="tree-pane">
+          <div class="explorer-pane-header">
+            <h3 id="tree-title"><i class="fas fa-network-wired"></i><span>File Structure</span></h3>
+            <button id="collapse-tree-folders-btn" class="tree-pane-action" type="button" title="Collapse expanded folders">
+              <i class="fas fa-compress-alt"></i> Collapse folders
+            </button>
+          </div>
+          <div id="file-tree" class="tree-container">
+            <div class="loading-state">
+              <i class="fas fa-folder-open fa-3x"></i>
+              <p>Select a folder or drive to scan.</p>
+            </div>
+          </div>
+        </section>
+        <section id="treemap-panel" class="treemap-panel">
+          <div class="explorer-pane-header">
+            <h3><i class="fas fa-border-all"></i> Space Map</h3>
+          </div>
+          <div class="treemap-toolbar">
+            <nav id="treemap-breadcrumb" class="treemap-breadcrumb" aria-label="Treemap location"></nav>
+            <button id="treemap-small-items-btn" class="treemap-small-items-control" type="button" hidden></button>
+          </div>
+          <div id="treemap-canvas" class="treemap-canvas"></div>
+        </section>
+      </div>
+    </section>
+
+    <!-- File Details Panel -->
+    <section id="file-details" class="details-section">
+      <div class="section-header">
+        <h2><i class="fas fa-info-circle"></i> File Information</h2>
+        <button id="close-details" title="Close">×</button>
+      </div>
+      
+      <!-- Empty state (shown until file selected) -->
+      <div class="empty-state">
+        <i class="fas fa-folder-tree fa-3x"></i>
+        <p>Select a file from the tree to view details</p>
+      </div>
+    </section>
+  </main>
+
+  <div id="file-context-menu" class="file-context-menu" role="menu" hidden>
+    <button type="button" role="menuitem" data-file-action="copy-path"><i class="fas fa-copy"></i> Copy Path</button>
+    <button type="button" role="menuitem" data-file-action="reveal"><i class="fas fa-folder-open"></i> Open in Explorer</button>
+    <button type="button" role="menuitem" data-file-action="rename"><i class="fas fa-pen"></i> Rename</button>
+    <button type="button" role="menuitem" data-file-action="delete"><i class="fas fa-trash-can"></i> Move to Recycle Bin</button>
+  </div>
+
+  <div id="action-toast" class="action-toast" role="status" aria-live="polite" hidden></div>
+
+  <dialog id="rename-dialog" class="rename-dialog">
+    <form id="rename-form">
+      <h2>Rename file</h2>
+      <label for="rename-input">New file name</label>
+      <input id="rename-input" name="name" type="text" maxlength="255" required>
+      <p id="rename-error" class="rename-error" hidden></p>
+      <div class="rename-actions">
+        <button id="rename-cancel" type="button">Cancel</button>
+        <button type="submit">Rename</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="scan-filters-dialog" class="rename-dialog scan-filters-dialog">
+    <form id="scan-filters-form">
+      <h2>Scan filters</h2>
+      <label for="include-extensions">Include extensions</label>
+      <input id="include-extensions" name="includeExtensions" type="text" placeholder="All extensions">
+      <label for="exclude-extensions">Exclude extensions</label>
+      <input id="exclude-extensions" name="excludeExtensions" type="text" placeholder=".tmp, .log">
+      <label for="exclude-folders">Exclude folder names</label>
+      <input id="exclude-folders" name="excludeFolderNames" type="text" placeholder="node_modules, .git">
+      <p class="scan-filters-note">Extension changes apply to the current scan. Changing excluded folders requires rescanning the disk.</p>
+      <p id="scan-filters-error" class="rename-error" hidden></p>
+      <div class="rename-actions">
+        <button id="reset-scan-filters" type="button">Reset</button>
+        <button id="cancel-scan-filters" type="button">Cancel</button>
+        <button type="submit">Apply Filters</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Footer Status Bar -->
+  <footer class="app-footer">
+    <span id="theme-status"><i class="fas fa-adjust"></i> Theme: Dark</span>
+    <span id="files-loaded"><i class="fas fa-hdd"></i> Files loaded: -</span>
+    <span id="last-updated"><i class="fas fa-clock"></i> Last updated: --</span>
+  </footer>
+
+  <!-- Our JavaScript Logic -->
+  <script src="node_modules/d3-hierarchy/dist/d3-hierarchy.min.js"></script>
+  <script src="virtual-tree.js"></script>
+  <script src="treemap.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

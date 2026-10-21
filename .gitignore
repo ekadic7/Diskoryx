@@ -1,0 +1,7 @@
+node_modules/
+dist/
+mft-scanner/target/
+native/file-actions/bin/
+native/scan-broker/bin/
+Installation files/.build/
+Installation files/*.exe
