@@ -30,10 +30,12 @@ Use Windows x64, Node.js 22 or later, and a normal non-administrator PowerShell:
 ```powershell
 npm ci
 npm test
+npm run build:file-actions
+npm run build:scan-broker
 npm start
 ```
 
-`npm ci` restores the locked development dependencies. The installed app does not require Node.js or a network connection. The first NTFS drive scan may request UAC for the scanner worker. Declining UAC reports the failure rather than silently starting slow filesystem traversal. Browse Folder does not request UAC.
+`npm ci` restores the locked development dependencies. `native/file-actions/bin/` and `native/scan-broker/bin/` are local build artifacts and are not tracked, so build both helpers in a fresh checkout or after updating their sources or the bundled scanner; a broker built for an older protocol is refused instead of being paired with the new scanner. The full installer build runs both steps automatically. The installed app does not require Node.js or a network connection. The first NTFS drive scan may request UAC for the scanner worker. Declining UAC reports the failure rather than silently starting slow filesystem traversal. Browse Folder does not request UAC.
 
 ## Support Diskoryx
 
@@ -49,9 +51,9 @@ On Windows x64, with dependencies installed and the .NET Framework 4.x x64 C# co
 npm run build:installer:win
 ```
 
-This builds the ordinary-user file-action helper and scan broker, verifies that the bundled MFT scanner matches its pinned SHA-256, then creates a per-user x64 NSIS installer at `Installation files/Diskoryx-Setup-1.0.1.exe`. The installer does not require administrator rights; Diskoryx requests UAC only for NTFS MFT scans. It is unsigned, so Windows SmartScreen may display a warning. Test the installer on a disposable/test account before sharing it.
+This builds the ordinary-user file-action helper and scan broker, verifies that the bundled MFT scanner matches its pinned SHA-256, then creates a per-user x64 NSIS installer at `Installation files/Diskoryx-Setup-1.0.2.exe`. The installer does not require administrator rights; Diskoryx requests UAC only for NTFS MFT scans. It is unsigned, so Windows SmartScreen may display a warning. Test the installer on a disposable/test account before sharing it.
 
-The installer includes the MFT scanner and both native helpers as Electron resources. Build-time output and helper executables are ignored by Git; the pinned MFT scanner binary is included in the repository so a clean checkout can package the same approved scanner image. The Rust source and lockfile are retained for reference, but rebuilding the MFT binary is not part of the V1 installer build.
+The installer includes the MFT scanner and both native helpers as Electron resources. Build-time output and helper executables are ignored by Git; the pinned MFT scanner binary is included in the repository so a clean checkout can package the same approved scanner image. The Rust source and lockfile are retained; rebuilding the scanner (`cargo build --release` in `mft-scanner`, then update the SHA-256 in `native/scan-broker/ScannerIdentity.cs` and run `npm run build:scan-broker`) is a manual step, not part of the installer build, so packaging always verifies the reviewed binary.
 
 Diskoryx's Windows executable, shortcuts, and app/taskbar window use the bundled icon in `src/assets/diskoryx.ico`.
 
@@ -77,7 +79,7 @@ HTML, preload and native executable paths are resolved from the app/package, not
 
 ## Test
 
-`npm test` runs the complete regression suite. `npm run test:smoke` starts one hidden Electron instance with real renderer/preload/IPC and disposable files. `node scripts/smoke.cjs --multi-drive --paste-ui --live-pause` adds the in-app destination/Create folder/Move workflows, multiple-location switching, and real Windows notification checks using disposable fixtures. `node scripts/smoke.cjs --real-recycle` exercises real Recycle Bin behavior only on its own disposable files and restores its fixtures; it never empties the bin. `node scripts/smoke.cjs --mft` performs a real read-only C: MFT scan and requires the user to approve UAC. Set `DISKORYX_SMOKE_MFT_TARGET` to an existing file on C: before running `--mft` to also time Diskoryx's exact-name search in the completed scan. Do not run that opt-in command unattended.
+`npm test` runs the complete regression suite. Run `cargo test --locked` in `mft-scanner` for native parent-reference, hard-link ownership and name-boundary regressions. `npm run test:smoke` starts one hidden Electron instance with real renderer/preload/IPC and disposable files. `node scripts/smoke.cjs --multi-drive --paste-ui --live-pause` adds the in-app destination/Create folder/Move workflows, multiple-location switching, and real Windows notification checks using disposable fixtures. `node scripts/smoke.cjs --real-recycle` exercises real Recycle Bin behavior only on its own disposable files and restores its fixtures; it never empties the bin. `node scripts/smoke.cjs --mft` performs a real read-only C: MFT scan and requires the user to approve UAC. Set `DISKORYX_SMOKE_MFT_TARGET` to an existing file on C: before running `--mft` to also time Diskoryx's exact-name search in the completed scan. Do not run that opt-in command unattended.
 
 ## Interface
 
@@ -115,7 +117,11 @@ Largest files lists all matching paths in descending logical size (not only a To
 
 Size order also shows eight relative horizontal bars for the largest matching files; the largest is 100%, not a percentage of disk capacity. Click/right-click retains the file's normal navigation/actions. The graph is hidden for File types and name/date order. Analysis uses stable native block sorts and cooperative immediate-yield merges instead of timer-based full merge sorting. A local synthetic 850,000-file comparison measured the old sort alone at 13,203 ms and new filtering plus sorting at 479 ms, with matching first result. Regression coverage checks complete size/name/date ordering parity, stable ties across blocks and one million files within five seconds while yielding to the event loop. These are analysis-view measurements, not MFT scan timings.
 
-The Rust source, manifest and lockfile are included alongside the pinned MFT executable. The distributed scanner is verified against `native/scan-broker/ScannerIdentity.cs`; it is not rebuilt by the installer script. True allocated Size on disk is not currently available and is never estimated or substituted with logical size.
+The Rust source, manifest and lockfile are included alongside the pinned MFT executable. The distributed scanner is verified against `native/scan-broker/ScannerIdentity.cs`; it is not rebuilt by the installer script. The scanner emits a compact binary stream — directory records with parent indices, then file records with names and metadata — instead of one JSON line per path, and file paths are assembled once in the application from that structure. True allocated Size on disk is not currently available and is never estimated or substituted with logical size.
+
+The 1.0.2 scanner keeps full NTFS parent references, including sequence numbers, so a reused MFT slot cannot become an unrelated item's parent. Reserved `$Extend` metadata is read from the volume with its real reference rather than synthesized. Hard-link ownership uses case-insensitive full-path order among resolvable links and counts the first surviving link once if an earlier parent is unavailable. Folder exclusions retain snapshot ownership semantics; excluding the counted alias does not transfer its bytes to another alias. The binary importer rejects invalid names, UTF-8, flags, link counts and timestamps, requires a valid summary matching the transmitted record counts, and limits that summary to 64 KiB. Protocol-3 transport accepts only bounded Base64 byte frames. These checks preserve logical-size accounting, not physical allocated-size measurement.
+
+Smoke tests use a unique temporary application profile before acquiring the single-instance lock and refuse a zero exit code without the expected completion marker. This prevents an already-open Diskoryx window from turning a skipped smoke run into a false pass.
 
 ## Read-only file preview
 
@@ -161,11 +167,11 @@ Confirmation replies are bound to their exact request ID. A delayed response/err
 
 Privilege separation requests UAC on the first NTFS drive scan and reuses a dedicated scanner broker until app exit. UI, previews, Rename, Copy, Move and recycle actions run as the ordinary user. The broker accepts bounded scan/cancel requests for a drive letter, not arbitrary executable paths, arguments or file actions. Declining UAC or losing the broker reports an error rather than silently starting a slow fallback.
 
-`mft-scanner.js` parses scanner records and builds the in-memory tree. `mft-broker.js` streams bounded UTF-8-safe chunks over a persistent local native bridge; it does not create temporary scan dumps or open a network listener. `native/scan-broker/Program.cs` verifies its local named-pipe peer, runs only the pinned scanner image, and contains its worker lifecycle in a Windows Job Object. These controls are not a sandbox or an immutable trust boundary.
+`mft-scanner.js` parses the binary scanner stream and builds the in-memory tree. The scanner attributes the fixed `$Extend` NTFS metadata directory (record 11) to the scanned root, so its children (`$RmMetadata`, `$Deleted`, `$Quota`, `$UsnJrnl`, `$TxfLog`, ...) keep their parent even though the library does not list that reserved record; this is why a completed drive scan reports no skipped entries for them. `mft-broker.js` decodes bounded base64 frames (protocol 3) over a persistent local native bridge; the elevated worker forwards the scanner's bytes unchanged, so the binary stream is never decoded, re-escaped and re-encoded. The bridge does not create temporary scan dumps or open a network listener. `native/scan-broker/Program.cs` verifies its local named-pipe peer, runs only the pinned scanner image, and contains its worker lifecycle in a Windows Job Object. These controls are not a sandbox or an immutable trust boundary.
 
 Action History is saved locally in `action-history.json` under `%APPDATA%\\Diskoryx V1`. It retains at most 500 actions or 16 MiB. Successful Rename, Recycle, Copy and Move operations are recorded; records are not uploaded. History writes use a temporary file and replace only after writing succeeds, but this is not a crash-recovery journal. A process or power failure between a file action and its history write may leave an unrecorded action.
 
-Remaining limits include best-effort (not lossless) Windows filesystem notifications, no true allocated “Size on disk” metric, unsigned Windows binaries, and filesystem race conditions outside the guarded operations described above. The MFT scanner is pinned by SHA-256, but hashes do not establish publisher identity or guarantee that software is vulnerability-free. Further scan-speed optimization is deferred; timings vary with volume, cache and hardware.
+Remaining limits include best-effort (not lossless) Windows filesystem notifications, no true allocated “Size on disk” metric, unsigned Windows binaries, and filesystem race conditions outside the guarded operations described above. The MFT scanner is pinned by SHA-256, but hashes do not establish publisher identity or guarantee that software is vulnerability-free. The remaining scan time is dominated by the library's two sequential `$MFT` passes rather than by JavaScript indexing; timings vary with volume, cache and hardware.
 
 ## Test feedback
 
@@ -201,7 +207,7 @@ Watcher-loss reporting waits for the current file action/scan/export to settle. 
 
 `node scripts/smoke.cjs --live-pause` additionally triggers a real watcher pause using an owned temporary hard-link fixture, then verifies saved-snapshot folder paging, analysis, export availability and guarded Rename/Recycle without rescanning. Add `--mft` only with the user available to approve UAC: it also verifies actual C: MFT folder browsing with drive-wide notifications enabled. The real-recycle smoke restores a disposable item before any Copy/Undo operation, checking that restore is registered at startup; repeated Undo cannot register duplicate IPC handlers.
 
-Further scan-speed optimization is deferred to V2 and is not an installer prerequisite. Scan duration depends on drive type, file count, cache state, filters and hardware; any future comparison must record those conditions and verify that the complete result remains correct.
+Scan duration depends on drive type, file count, cache state, filters and hardware; any future comparison must record those conditions and verify that the complete result remains correct. On the recorded benchmark machine the compact stream moved a ~950,000-record C: scan from about 7.8 s to 3.9–4.5 s. A path-by-path comparison against the previous JSON output found no file missing except paths that no longer existed on disk, and the scanner's own size/metadata CPU dropped because it no longer resolves a full path for every entry.
 
 `node scripts/smoke.cjs --paste-ui` exercises folder Copy, in-app destination navigation, blank-area Paste, original preservation and collision refusal. Add `--live-pause` to exercise real notifications and saved-snapshot safety too. Optional `DISKORYX_SMOKE_CAPTURE` points to an existing local directory for dark/light History screenshots. Smoke browser caches are isolated under each disposable fixture so parallel checks do not contend for the user's Electron caches.
 

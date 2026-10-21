@@ -1,0 +1,15 @@
+{
+  "application": "Diskoryx source smoke harness",
+  "measuredAt": "2026-10-21T11:28:38.583Z",
+  "scope": "C:\\",
+  "query": "diskoryx.svg",
+  "target": "C:\\workspace\\github\\Diskoryx V1\\src\\assets\\diskoryx.svg",
+  "files": 737586,
+  "scanMs": 6752.755900000001,
+  "requestToViewMs": 7977.5,
+  "title": "1 search results",
+  "found": true,
+  "searchMs": 69.09999999403954,
+  "scanAndLookupMs": 8046.5999999940395,
+  "pollingIntervalMs": 25
+}

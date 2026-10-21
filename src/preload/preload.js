@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+	openSupportPage: () => ipcRenderer.invoke('open-support-page'),
 	scanFolder: (folderPath, scanFilters, requestId) => ipcRenderer.invoke('scan-folder', folderPath, scanFilters, requestId),
 	cancelScan: (requestId) => ipcRenderer.invoke('cancel-scan', requestId),
 	listDrives: () => ipcRenderer.invoke('list-drives'),

@@ -1,0 +1,14 @@
+{
+    "application":  "Windows File Explorer",
+    "startedAt":  "2026-10-21T12:27:21.7050856+01:00",
+    "scope":  "C:\\",
+    "query":  "diskoryx.svg",
+    "target":  "C:\\workspace\\github\\Diskoryx V1\\src\\assets\\diskoryx.svg",
+    "indexedBefore":  false,
+    "status":  "found",
+    "verifiedPath":  "C:\\workspace\\github\\Diskoryx V1\\src\\assets\\diskoryx.svg",
+    "elapsedMs":  993.9,
+    "timeoutSeconds":  20,
+    "pollingIntervalMs":  100,
+    "measurement":  "Typing query and Enter to visible filename row and exact Shell result path"
+}

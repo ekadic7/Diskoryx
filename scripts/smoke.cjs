@@ -29,6 +29,11 @@ try {
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   if (result.error) throw result.error;
+  const completionMarker = process.argv.includes('--startup-error')
+    ? 'PASS: isolated themed startup failure' : 'PASS: hidden Electron startup';
+  if (result.status === 0 && !result.stdout?.includes(completionMarker)) {
+    throw new Error('Electron smoke did not complete its expected checks.');
+  }
   process.exitCode = result.status === 0 ? 0 : 1;
 } finally {
   fs.rmSync(temporaryRoot, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });

@@ -2,10 +2,23 @@ const { startBrokerMftSession } = require('./mft-broker');
 const fs = require('node:fs');
 const path = require('node:path');
 const { performance } = require('node:perf_hooks');
+const { isUtf8 } = require('node:buffer');
 const { formatFileSize, normalizeScanFilters } = require('./scanner');
 
 const LARGEST_FILE_LIMIT = 100;
 const REPARSE_POINT_ATTRIBUTE = 0x400;
+// Wire format shared with mft-scanner/src/main.rs. Bump both sides together.
+const MFT_MAGIC = 0x324d5844; // "DXM2"
+const MFT_FORMAT_VERSION = 2;
+const FOLDER_RECORD_FIXED_SIZE = 10;
+const FILE_RECORD_FIXED_SIZE = 29;
+const MAX_PENDING_BYTES = 2 * 1024 * 1024;
+const MAX_SUMMARY_BYTES = 64 * 1024;
+const IMPORT_YIELD_INTERVAL = 8192;
+const FINALIZE_YIELD_INTERVAL = 4096;
+const TWO_DIGITS = Array.from({ length: 60 }, (_, value) => String(value).padStart(2, '0'));
+const THREE_DIGITS = Array.from({ length: 1000 }, (_, value) => String(value).padStart(3, '0'));
+
 const yieldToEventLoop = async (signal) => {
   await new Promise((resolve) => setImmediate(resolve));
   signal?.throwIfAborted();
@@ -54,6 +67,46 @@ function addLargestFile(largestFiles, file) {
     [largestFiles[index], largestFiles[smallest]] = [largestFiles[smallest], largestFiles[index]];
     index = smallest;
   }
+}
+
+// Same result as path.win32.extname(name).toLowerCase().slice(1), without a
+// path parser call per file.
+function extensionOf(name) {
+  const dot = name.lastIndexOf('.');
+  if (dot <= 0 || dot === name.length - 1) return 'unknown';
+  return name.slice(dot + 1).toLowerCase() || 'unknown';
+}
+
+function joinPath(parentPath, name) {
+  return parentPath.endsWith('\\') ? parentPath + name : parentPath + '\\' + name;
+}
+
+// Same output as new Date(ms).toISOString(), without allocating a Date and a
+// second string for every one of hundreds of thousands of files.
+function isoFromEpochMs(ms) {
+  const days = Math.floor(ms / 86400000);
+  let remainder = ms - days * 86400000;
+  const shifted = days + 719468;
+  const era = Math.floor(shifted / 146097);
+  const dayOfEra = shifted - era * 146097;
+  const yearOfEra = Math.floor((dayOfEra - Math.floor(dayOfEra / 1460)
+    + Math.floor(dayOfEra / 36524) - Math.floor(dayOfEra / 146096)) / 365);
+  const year = yearOfEra + era * 400;
+  const dayOfYear = dayOfEra - (365 * yearOfEra + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100));
+  const monthPart = Math.floor((5 * dayOfYear + 2) / 153);
+  const day = dayOfYear - Math.floor((153 * monthPart + 2) / 5) + 1;
+  const month = monthPart + (monthPart < 10 ? 3 : -9);
+  const fullYear = year + (month <= 2 ? 1 : 0);
+  const hours = Math.floor(remainder / 3600000);
+  remainder -= hours * 3600000;
+  const minutes = Math.floor(remainder / 60000);
+  remainder -= minutes * 60000;
+  const seconds = Math.floor(remainder / 1000);
+  const milliseconds = remainder - seconds * 1000;
+  const yearText = fullYear >= 0 && fullYear <= 9999
+    ? String(fullYear).padStart(4, '0')
+    : (fullYear < 0 ? `-${String(-fullYear).padStart(6, '0')}` : `+${String(fullYear).padStart(6, '0')}`);
+  return `${yearText}-${TWO_DIGITS[month]}-${TWO_DIGITS[day]}T${TWO_DIGITS[hours]}:${TWO_DIGITS[minutes]}:${TWO_DIGITS[seconds]}.${THREE_DIGITS[milliseconds]}Z`;
 }
 
 function createTreeBuilder(folderPath, scanFilters) {
@@ -169,89 +222,309 @@ function createTreeBuilder(folderPath, scanFilters) {
   }
 
   async function finish(summary, scanDurationMs, signal) {
-    signal?.throwIfAborted();
-    const pending = [{ node: root, visited: false }];
-    let workSinceYield = 0;
-    while (pending.length) {
-      const { node, visited } = pending.pop();
-      if (!visited) {
-        pending.push({ node, visited: true });
-        for (const child of node.children) {
-          if (child.type === 'folder') pending.push({ node: child, visited: false });
-          if (++workSinceYield % 4096 === 0) await yieldToEventLoop(signal);
-        }
-        continue;
-      }
-
-      node.rawSize = 0;
-      if (node !== root) {
-        node.size = '0 B';
-      }
-      node.fileCount = 0;
-      node.folderCount = 0;
-      node.extensionStats = Object.create(null);
-      for (const child of node.children) {
-        node.rawSize += child.type === 'file'
-          ? (child.aggregateSize ?? child.rawSize)
-          : child.rawSize;
-        if (child.type === 'folder') {
-          node.fileCount += child.fileCount;
-          node.folderCount += child.folderCount + 1;
-        } else {
-          node.fileCount++;
-        }
-
-        const childStats = child.type === 'folder'
-          ? child.extensionStats
-          : { [child.extension]: { fileCount: 1, totalSizeBytes: child.aggregateSize ?? child.rawSize, oldFilesCount: child.isOld ? 1 : 0 } };
-        for (const [extension, value] of Object.entries(childStats)) {
-          const current = node.extensionStats[extension] || { fileCount: 0, totalSizeBytes: 0, oldFilesCount: 0 };
-          current.fileCount += value.fileCount;
-          current.totalSizeBytes += value.totalSizeBytes;
-          current.oldFilesCount += value.oldFilesCount;
-          node.extensionStats[extension] = current;
-          if (++workSinceYield % 4096 === 0) await yieldToEventLoop(signal);
-        }
-        if (++workSinceYield % 4096 === 0) await yieldToEventLoop(signal);
-      }
-      if (node !== root) node.size = formatFileSize(node.rawSize);
-    }
-
-    root.size = formatFileSize(root.rawSize);
-    const largestFiles = [];
-    for (const file of fileNodes) {
-      addLargestFile(largestFiles, file);
-      if (++workSinceYield % 4096 === 0) await yieldToEventLoop(signal);
-    }
-    largestFiles.sort((left, right) => right.rawSize - left.rawSize);
-    const totalSkippedCount = skippedCount
-      + (summary?.corruptRecords || 0)
-      + (summary?.unresolvedPaths || 0);
-    const entriesScanned = fileNodes.length + folderNodes.length - 1 + totalSkippedCount;
-
-    return {
-      success: true,
-      folderPath: rootPath,
-      scanFilters: normalizeScanFilters(scanFilters),
-      folderNodes,
-      fileNodes,
-      largestFiles,
-      scanDurationMs,
-      entriesPerSecond: entriesScanned / Math.max(scanDurationMs / 1000, 0.001),
-      totalSizeBytes: root.rawSize,
-      fileCount: fileNodes.length,
-      folderCount: folderNodes.length - 1,
-      reparsePointCount,
-      oldFilesCount: Object.values(root.extensionStats).reduce((total, value) => total + value.oldFilesCount, 0),
-      skippedCount: totalSkippedCount,
-      filteredCount: 0,
-      excludedFolderCount: excludedFolders.size,
-      filesByType: Object.fromEntries(Object.entries(root.extensionStats).map(([extension, value]) => [extension, value.fileCount])),
-      totalSizeFormatted: formatFileSize(root.rawSize)
-    };
+    const result = await finalizeScan({
+      root, folderNodes, fileNodes, folderPath: rootPath, scanFilters, scanTimestamp,
+      skippedCount, reparsePointCount, excludedFolderCount: excludedFolders.size, summary, signal
+    });
+    result.scanDurationMs = scanDurationMs;
+    result.entriesPerSecond = (result.fileCount + result.folderCount + result.skippedCount)
+      / Math.max(scanDurationMs / 1000, 0.001);
+    return result;
   }
 
   return { addRecord, finish };
+}
+
+// Builds the tree straight from the scanner's compact records: every folder was
+// already sent with its parent id, so no path map or path splitting is needed.
+function createBinaryTree(folderPath, scanTimestamp, scanFilters) {
+  const folderNodes = [{ folderId: 0, path: folderPath, children: [] }];
+  const fileNodes = [];
+  const excludedNames = new Set(normalizeScanFilters(scanFilters).excludeFolderNames);
+  // Stream order includes excluded folders; null marks one whose subtree is skipped.
+  const streamFolders = [folderNodes[0]];
+  let reparsePointCount = 0;
+  let excludedFolderCount = 0;
+
+  function addFolder(parentFolderId, name, fileAttributes) {
+    const parent = streamFolders[parentFolderId];
+    if (parent === undefined) throw new Error('MFT scanner returned a folder whose parent is missing.');
+    if (parent === null) {
+      streamFolders.push(null);
+      return;
+    }
+    if (excludedNames.has(name.toLowerCase())) {
+      streamFolders.push(null);
+      excludedFolderCount++;
+      return;
+    }
+    const folder = {
+      name,
+      path: joinPath(parent.path, name),
+      folderId: folderNodes.length,
+      parentFolderId: parent.folderId,
+      type: 'folder',
+      children: [],
+      rawSize: 0,
+      size: '0 B',
+      isPlaceholder: false
+    };
+    parent.children.push(folder);
+    folderNodes.push(folder);
+    streamFolders.push(folder);
+    if ((fileAttributes & REPARSE_POINT_ATTRIBUTE) !== 0) reparsePointCount++;
+  }
+
+  function addFile(parentFolderId, name, size, modifiedMs, fileAttributes, hardLinkCount, sizeOwner) {
+    const parent = streamFolders[parentFolderId];
+    if (parent === undefined) throw new Error('MFT scanner returned a file whose folder is missing.');
+    if (parent === null) return;
+    const file = {
+      name,
+      path: joinPath(parent.path, name),
+      parentFolderId: parent.folderId,
+      type: 'file',
+      rawSize: size,
+      aggregateSize: sizeOwner ? size : 0,
+      size: formatFileSize(size),
+      date: modifiedMs === null ? null : isoFromEpochMs(modifiedMs),
+      isOld: modifiedMs !== null && scanTimestamp - modifiedMs >= 30 * 86400000,
+      extension: extensionOf(name),
+      hardLinkCount,
+      sizeOwner
+    };
+    parent.children.push(file);
+    fileNodes.push(file);
+    if ((fileAttributes & REPARSE_POINT_ATTRIBUTE) !== 0) reparsePointCount++;
+  }
+
+  return {
+    folderNodes, fileNodes, addFolder, addFile,
+    get reparsePointCount() { return reparsePointCount; },
+    get excludedFolderCount() { return excludedFolderCount; }
+  };
+}
+
+// Folder ids follow parent-before-child order, so one reverse pass folds every
+// folder into its parent without a stack or visited set.
+async function finalizeScan(options) {
+  const {
+    root, folderNodes, fileNodes, folderPath, scanFilters, scanTimestamp,
+    skippedCount, reparsePointCount, excludedFolderCount, summary, signal
+  } = options;
+  let work = 0;
+  signal?.throwIfAborted();
+
+  for (const node of folderNodes) {
+    node.rawSize = 0;
+    node.fileCount = 0;
+    node.folderCount = 0;
+    node.extensionStats = Object.create(null);
+  }
+
+  const largestFiles = [];
+  for (const file of fileNodes) {
+    const parent = folderNodes[file.parentFolderId];
+    const counted = file.aggregateSize ?? file.rawSize;
+    parent.rawSize += counted;
+    parent.fileCount++;
+    const stats = parent.extensionStats[file.extension]
+      || (parent.extensionStats[file.extension] = { fileCount: 0, totalSizeBytes: 0, oldFilesCount: 0 });
+    stats.fileCount++;
+    stats.totalSizeBytes += counted;
+    if (file.isOld) stats.oldFilesCount++;
+    addLargestFile(largestFiles, file);
+    if ((++work % FINALIZE_YIELD_INTERVAL) === 0) await yieldToEventLoop(signal);
+  }
+
+  for (let index = folderNodes.length - 1; index > 0; index--) {
+    const node = folderNodes[index];
+    const parent = folderNodes[node.parentFolderId];
+    node.size = formatFileSize(node.rawSize);
+    parent.rawSize += node.rawSize;
+    parent.fileCount += node.fileCount;
+    parent.folderCount += node.folderCount + 1;
+    const parentStats = parent.extensionStats;
+    for (const extension in node.extensionStats) {
+      const value = node.extensionStats[extension];
+      const current = parentStats[extension]
+        || (parentStats[extension] = { fileCount: 0, totalSizeBytes: 0, oldFilesCount: 0 });
+      current.fileCount += value.fileCount;
+      current.totalSizeBytes += value.totalSizeBytes;
+      current.oldFilesCount += value.oldFilesCount;
+    }
+    if ((++work % FINALIZE_YIELD_INTERVAL) === 0) await yieldToEventLoop(signal);
+  }
+  root.size = formatFileSize(root.rawSize);
+
+  largestFiles.sort((left, right) => right.rawSize - left.rawSize);
+  const totalSkippedCount = skippedCount
+    + (summary?.corruptRecords || 0)
+    + (summary?.unresolvedPaths || 0);
+
+  return {
+    success: true,
+    folderPath,
+    scanFilters: normalizeScanFilters(scanFilters),
+    folderNodes,
+    fileNodes,
+    largestFiles,
+    scanDurationMs: 0,
+    entriesPerSecond: 0,
+    totalSizeBytes: root.rawSize,
+    fileCount: fileNodes.length,
+    folderCount: folderNodes.length - 1,
+    reparsePointCount,
+    oldFilesCount: Object.values(root.extensionStats).reduce((total, value) => total + value.oldFilesCount, 0),
+    skippedCount: totalSkippedCount,
+    filteredCount: 0,
+    excludedFolderCount,
+    filesByType: Object.fromEntries(Object.entries(root.extensionStats).map(([extension, value]) => [extension, value.fileCount])),
+    totalSizeFormatted: formatFileSize(root.rawSize)
+  };
+}
+
+function readUInt64AsNumber(buffer, offset) {
+  const low = buffer.readUInt32LE(offset);
+  const high = buffer.readUInt32LE(offset + 4);
+  return low + high * 4294967296;
+}
+
+function readInt64AsNumber(buffer, offset) {
+  const low = buffer.readUInt32LE(offset);
+  const high = buffer.readInt32LE(offset + 4);
+  return low + high * 4294967296;
+}
+
+function readName(buffer, start, end) {
+  if (!isUtf8(buffer.subarray(start, end))) throw new Error('Invalid MFT name encoding.');
+  const name = buffer.toString('utf8', start, end);
+  if (!name || name === '.' || name === '..' || /[\\/\0:]/.test(name)) {
+    throw new Error('Invalid MFT name component.');
+  }
+  return name;
+}
+
+function validateSummary(summary, folderCount, fileCount) {
+  const counts = ['recordSlots', 'files', 'directories', 'unresolvedPaths', 'corruptRecords', 'memoryBytes'];
+  if (!summary || summary.type !== 'summary'
+    || counts.some(key => !Number.isSafeInteger(summary[key]) || summary[key] < 0)
+    || !Number.isFinite(summary.elapsedMs) || summary.elapsedMs < 0
+    || !Number.isInteger(summary.logicalBytes) || summary.logicalBytes < 0
+    || summary.files !== fileCount || summary.directories !== folderCount) {
+    throw new Error('Invalid MFT summary record or record counts.');
+  }
+  return summary;
+}
+
+async function importBinaryScan(session, tree, signal) {
+  let pending = null;
+  let phase = 0;
+  let foldersLeft = 0;
+  let filesLeft = 0;
+  let processed = 0;
+  let folderCount = 0;
+  let fileCount = 0;
+  let summaryBytes = 0;
+  const summaryChunks = [];
+
+  for await (const chunk of session.stdout.iterator({ destroyOnReturn: false })) {
+    signal?.throwIfAborted();
+    let buffer = pending ? Buffer.concat([pending, chunk]) : chunk;
+    let offset = 0;
+
+    while (true) {
+      if (phase === 0) {
+        if (buffer.length - offset < 12) break;
+        if (buffer.readUInt32LE(offset) !== MFT_MAGIC) {
+          throw new Error('Unsupported MFT scanner output; rebuild the bundled scanner.');
+        }
+        if (buffer.readUInt32LE(offset + 4) !== MFT_FORMAT_VERSION) {
+          throw new Error('Unsupported MFT scanner format version; rebuild the bundled scanner.');
+        }
+        foldersLeft = buffer.readUInt32LE(offset + 8);
+        folderCount = foldersLeft;
+        offset += 12;
+        phase = 1;
+      } else if (phase === 1) {
+        if (foldersLeft === 0) {
+          phase = 2;
+          continue;
+        }
+        if (buffer.length - offset < FOLDER_RECORD_FIXED_SIZE) break;
+        const nameLength = buffer.readUInt16LE(offset + 8);
+        const recordSize = FOLDER_RECORD_FIXED_SIZE + nameLength;
+        if (buffer.length - offset < recordSize) break;
+        tree.addFolder(
+          buffer.readUInt32LE(offset),
+          readName(buffer, offset + FOLDER_RECORD_FIXED_SIZE, offset + recordSize),
+          buffer.readUInt32LE(offset + 4)
+        );
+        offset += recordSize;
+        foldersLeft--;
+      } else if (phase === 2) {
+        if (buffer.length - offset < 4) break;
+        filesLeft = buffer.readUInt32LE(offset);
+        fileCount = filesLeft;
+        offset += 4;
+        phase = 3;
+      } else if (phase === 3) {
+        if (filesLeft === 0) {
+          phase = 4;
+          break;
+        }
+        if (buffer.length - offset < FILE_RECORD_FIXED_SIZE) break;
+        const nameLength = buffer.readUInt16LE(offset + 27);
+        const recordSize = FILE_RECORD_FIXED_SIZE + nameLength;
+        if (buffer.length - offset < recordSize) break;
+        const flags = buffer[offset + 26];
+        const hardLinkCount = buffer.readUInt16LE(offset + 24);
+        const modifiedMs = flags & 2 ? readInt64AsNumber(buffer, offset + 12) : null;
+        if ((flags & ~3) !== 0 || hardLinkCount === 0
+          || (modifiedMs !== null && Math.abs(modifiedMs) > 8640000000000000)) {
+          throw new Error('Invalid MFT file metadata.');
+        }
+        tree.addFile(
+          buffer.readUInt32LE(offset),
+          readName(buffer, offset + FILE_RECORD_FIXED_SIZE, offset + recordSize),
+          readUInt64AsNumber(buffer, offset + 4),
+          modifiedMs,
+          buffer.readUInt32LE(offset + 20),
+          hardLinkCount,
+          (flags & 1) !== 0
+        );
+        offset += recordSize;
+        filesLeft--;
+      } else {
+        break;
+      }
+      if ((++processed % IMPORT_YIELD_INTERVAL) === 0) await yieldToEventLoop(signal);
+    }
+
+    pending = buffer.subarray(offset);
+    if (phase === 4) {
+      summaryBytes += pending.length;
+      if (summaryBytes > MAX_SUMMARY_BYTES) throw new Error('MFT summary exceeds the supported size limit.');
+      if (pending.length) summaryChunks.push(pending);
+      pending = null;
+    } else if (pending.length > MAX_PENDING_BYTES) {
+      throw new Error('MFT record exceeds the supported size limit.');
+    }
+    await yieldToEventLoop(signal);
+  }
+
+  // A truncated stream is reported after the caller has inspected the helper's
+  // exit status, so a spawn failure is not masked by a parsing error.
+  if (phase !== 4) return null;
+  const text = Buffer.concat(summaryChunks).toString('utf8').trim();
+  if (!text) throw new Error('MFT scanner finished without a summary record.');
+  let summary;
+  try {
+    summary = JSON.parse(text);
+  } catch (error) {
+    throw new Error('Invalid MFT summary JSON.', { cause: error });
+  }
+  return validateSummary(summary, folderCount, fileCount);
 }
 
 function isProgressLine(line) {
@@ -267,20 +540,19 @@ async function scanMftVolume(folderPath, onProgress, scanFilters = {}, isPackage
   const resolvedRoot = path.win32.resolve(folderPath);
   const driveLetter = resolvedRoot[0];
   const devicePath = `\\\\.\\${driveLetter}:`;
-  const tree = createTreeBuilder(resolvedRoot, scanFilters);
+  const scanTimestamp = Date.now();
+  const tree = createBinaryTree(resolvedRoot, scanTimestamp, scanFilters);
 
   const session = await startBrokerMftSession(executable, devicePath, signal);
   // Time the scan, not how long the user spends at the UAC prompt.
   const started = performance.now();
   return new Promise((resolve, reject) => {
-    session.stdout.setEncoding('utf8');
+    session.stderr.setEncoding('utf8');
     let summary = null;
     let stderrBuffer = '';
     let stderrTail = '';
-    let recordImportMs = 0;
-    let recordsImported = 0;
+    let importMs = 0;
 
-    session.stderr.setEncoding('utf8');
     session.stderr.on('data', (chunk) => {
       if (signal?.aborted) return;
       stderrTail = `${stderrTail}${chunk}`.slice(-8192);
@@ -317,35 +589,9 @@ async function scanMftVolume(folderPath, onProgress, scanFilters = {}, isPackage
           elapsedMs: 0,
           entriesPerSecond: 0
         });
-        let linesProcessed = 0;
-        let remainder = '';
-        function importLine(line) {
-          if (!line.trim()) return;
-          const record = JSON.parse(line);
-          if (record.type === 'entry') tree.addRecord(record);
-          else if (record.type === 'summary') summary = record;
-          recordsImported++;
-        }
-        for await (const chunk of session.stdout.iterator({ destroyOnReturn: false })) {
-          signal?.throwIfAborted();
-          const text = remainder + chunk;
-          let offset = 0;
-          let importStarted = performance.now();
-          for (let end; (end = text.indexOf('\n', offset)) !== -1;) {
-            if (end - offset > 1048576) throw new Error('MFT record exceeds the supported size limit.');
-            importLine(text.slice(offset, end));
-            offset = end + 1;
-            if (++linesProcessed % 256 === 0) {
-              recordImportMs += performance.now() - importStarted;
-              await yieldToEventLoop(signal);
-              importStarted = performance.now();
-            }
-          }
-          recordImportMs += performance.now() - importStarted;
-          remainder = text.slice(offset);
-          if (remainder.length > 1048576) throw new Error('MFT record exceeds the supported size limit.');
-        }
-        if (remainder) importLine(remainder);
+        const importStarted = performance.now();
+        summary = await importBinaryScan(session, tree, signal);
+        importMs = performance.now() - importStarted;
 
         const { code, signal: exitSignal, error: spawnError } = await session.completion;
         signal?.throwIfAborted();
@@ -353,20 +599,33 @@ async function scanMftVolume(folderPath, onProgress, scanFilters = {}, isPackage
         if (code !== 0) {
           throw new Error(stderrTail.trim() || `MFT scanner exited with code ${code ?? exitSignal}`);
         }
-        if (!summary) throw new Error('MFT scanner finished without a summary record.');
+        if (!summary) throw new Error('The MFT scanner ended before all records were received.');
         const totalElapsedMs = performance.now() - started;
         const finalizeStarted = performance.now();
-        const result = await tree.finish(summary, totalElapsedMs, signal);
+        const result = await finalizeScan({
+          root: tree.folderNodes[0],
+          folderNodes: tree.folderNodes,
+          fileNodes: tree.fileNodes,
+          folderPath: resolvedRoot,
+          scanFilters,
+          scanTimestamp,
+          skippedCount: 0,
+          reparsePointCount: tree.reparsePointCount,
+          excludedFolderCount: tree.excludedFolderCount,
+          summary,
+          signal
+        });
         signal?.throwIfAborted();
         result.scanDurationMs = performance.now() - started;
         result.entriesPerSecond = (result.fileCount + result.folderCount + result.skippedCount)
           / Math.max(result.scanDurationMs / 1000, 0.001);
         console.info('[Diskoryx MFT timing]', JSON.stringify({
           helperMs: summary.elapsedMs,
-          importAndIndexCpuMs: recordImportMs,
+          importMs,
           finalizeMs: performance.now() - finalizeStarted,
           totalMs: result.scanDurationMs,
-          recordsImported
+          recordsImported: result.fileCount + result.folderCount,
+          transferMs: Math.round(totalElapsedMs - summary.elapsedMs)
         }));
         resolve(result);
       } catch (error) {

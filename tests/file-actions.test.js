@@ -36,7 +36,7 @@ function loadMain(directory, confirmation, recycle, saveDialog, overrides = {}) 
         } },
         dialog: { showMessageBox: confirmation, showSaveDialog: saveDialog,
           showOpenDialog() { assert.fail('Paste must not open a Windows folder picker'); } },
-        shell: { trashItem: recycle }
+        shell: { trashItem: recycle, ...overrides.shell }
       };
       if (name === './scanner') return {
         ...rootRequire(name),
@@ -61,6 +61,22 @@ test('Windows names reject path escapes, streams and reserved devices', () => {
   for (const value of ['', '../test', '..', 'a:b', 'NUL.txt', 'COM1', 'LPT9.log', 'x.', 'x ', ' x', 'a\0b']) {
     assert.throws(() => validateNewName(value), /valid Windows/);
   }
+});
+
+test('support opens only the fixed Ko-fi page on request and reports browser failures', async t => {
+  const { root } = await fixture(t);
+  const calls = [];
+  const main = loadMain(root, undefined, undefined, undefined, {
+    shell: { openExternal: async url => { calls.push(url); } }
+  });
+  assert.equal(calls.length, 0, 'support must not open automatically');
+  const result = await main.handlers.get('open-support-page')(main.event, 'https://untrusted.invalid');
+  assert.equal(result.success, true);
+  assert.deepEqual(calls, ['https://ko-fi.com/edi969247']);
+  const failed = loadMain(root, undefined, undefined, undefined, {
+    shell: { openExternal: async () => { throw new Error('browser unavailable'); } }
+  });
+  assert.match((await failed.handlers.get('open-support-page')(failed.event)).error, /browser unavailable/);
 });
 
 test('Create folder validates membership, inserts folders into cached totals and rejects stale revisions', async t => {

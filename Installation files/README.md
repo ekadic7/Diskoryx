@@ -2,7 +2,7 @@
 
 After building the Windows x64 installer for this V1 release, it is placed in this folder as:
 
-`Diskoryx-Setup-1.0.0.exe`
+`Diskoryx-Setup-1.0.2.exe`
 
 The installer is generated locally with `npm run build:installer:win`. The generated executable is intentionally not committed to the source repository; publish it as an asset attached to a GitHub Release after testing it. The installer is unsigned, so Windows may show a SmartScreen warning.
 

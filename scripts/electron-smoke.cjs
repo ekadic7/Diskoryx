@@ -11,6 +11,9 @@ const temporaryRoot = process.env.DISKORYX_SMOKE_ROOT;
 const realRecycle = process.env.DISKORYX_SMOKE_REAL_RECYCLE === '1';
 const multiDrive = process.env.DISKORYX_SMOKE_MULTI_DRIVE === '1';
 if (!temporaryRoot) throw new Error('Run with npm run test:smoke, not directly.');
+const instanceProfile = path.join(temporaryRoot, 'profile');
+fsSync.mkdirSync(instanceProfile, { recursive: true });
+electron.app.setPath('userData', instanceProfile);
 electron.app.setPath('sessionData', temporaryRoot);
 const mainRoot = path.join(__dirname, '..', 'src', 'main');
 const mainRequire = createRequire(path.join(mainRoot, 'main.js'));
@@ -20,6 +23,8 @@ let recycleCount = 0;
 let initialCopyRecord;
 const rendererErrors = [];
 const requests = [];
+const supportLinks = [];
+let supportBrowserFailure = false;
 const fixtureDrives = ['A', 'B', 'C'].map(letter => ({
   path: path.join(temporaryRoot, `drive-${letter}`), label: `Fixture ${letter}`
 }));
@@ -86,6 +91,10 @@ async function run() {
         },
         shell: {
           ...electron.shell,
+          openExternal: async url => {
+            if (supportBrowserFailure) throw new Error('Browser unavailable for smoke check');
+            supportLinks.push(url);
+          },
           // Exercise UI/backend completion without touching the real Windows Recycle Bin.
           trashItem: target => realRecycle
             ? electron.shell.trashItem(target)
@@ -153,6 +162,16 @@ async function run() {
   assert.equal(await js('typeof window.VirtualTree'), 'function');
   assert.equal(await js('typeof window.DiskTreemap'), 'function');
   assert.equal(await js('typeof window.d3.treemap'), 'function');
+  assert.deepEqual(supportLinks, []);
+  await js('document.getElementById("support-btn").click()');
+  await waitFor('!document.getElementById("support-btn").disabled');
+  assert.deepEqual(supportLinks, ['https://ko-fi.com/edi969247']);
+  supportBrowserFailure = true;
+  await js('document.getElementById("support-btn").click()');
+  await waitFor('!document.getElementById("support-btn").disabled && messageDialog.open');
+  assert.match(await js('document.getElementById("message-text").textContent'), /Browser unavailable/);
+  await js('document.getElementById("message-close").click()');
+  supportBrowserFailure = false;
   await js('document.fonts.ready');
   assert.equal(await js('document.fonts.check(\'900 14px "Font Awesome 6 Free"\')'), true);
   const folderPath = path.join(temporaryRoot, 'scan');
@@ -236,7 +255,7 @@ async function run() {
     await js('document.body.dataset.theme = "dark"');
   }
   if (realRecycle) {
-    initialCopyRecord = JSON.parse(await fs.readFile(path.join(temporaryRoot, 'settings', 'action-history.json'), 'utf8'))
+    initialCopyRecord = JSON.parse(await fs.readFile(path.join(electron.app.getPath('userData'), 'action-history.json'), 'utf8'))
       .entries.find(entry => entry.kind === 'copy');
   }
   await js('document.querySelector("#history-rows tr button").click()');
@@ -351,6 +370,7 @@ async function run() {
     })`);
     console.log('PASS: normal-user hidden Electron completed real administrator MFT scan.',
       await js(`JSON.stringify({files:currentResult.fileCount,ms:currentResult.scanDurationMs,
+        skipped:currentResult.skippedCount,
         requestToViewMs:performance.now()-${scanReadyStarted}})`));
     const benchmarkTarget = process.env.DISKORYX_SMOKE_MFT_TARGET;
     if (benchmarkTarget) {

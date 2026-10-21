@@ -134,6 +134,14 @@ button:focus-visible, input:focus-visible, select:focus-visible, [role="separato
 .sidebar-tip strong { color: var(--text); font-weight: 500; }
 .sidebar-tip p { margin: 3px 0 0; }
 .sidebar-bottom { margin-top: auto; }
+.support-card { display: grid; gap: 7px; margin: 0 4px 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.support-heading { display: flex; align-items: center; gap: 7px; font-size: 11px; }
+.support-heading i { color: var(--accent); }
+.support-heading strong { font-weight: 550; }
+.support-card p { margin: 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.support-card > span { color: var(--muted); font-size: 9px; line-height: 1.5; }
+#support-btn { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 33px; border: 1px solid var(--line); border-radius: 7px; background: var(--accent-soft); color: var(--accent-strong); font-size: 11px; }
+#support-btn:hover:not(:disabled) { background: var(--surface-hover); }
 .disk-capacity-card { display: grid; gap: 7px; margin: 0 4px 12px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .disk-capacity-heading { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
 .disk-capacity-heading i { color: var(--accent); }

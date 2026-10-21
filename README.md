@@ -42,10 +42,12 @@ Built with Electron and a Rust MFT scanner. On Windows x64 with Node.js 22 or la
 ```powershell
 npm ci
 npm test
+npm run build:file-actions
+npm run build:scan-broker
 npm start
 ```
 
-For installer builds, file-action limits, and testing details, see the [technical guide](docs/technical-guide.md). Code contributions are welcome; please read [CONTRIBUTING.md](CONTRIBUTING.md).
+Build both native helpers in a fresh checkout or after updating their sources or the bundled scanner. For installer builds, file-action limits, and testing details, see the [technical guide](docs/technical-guide.md). Code contributions are welcome; please read [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Support
 

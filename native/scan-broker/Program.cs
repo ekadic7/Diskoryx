@@ -291,19 +291,14 @@ internal static class Program
     private static void Pump(StreamReader stream, string kind, int id)
     {
         byte[] bytes = new byte[65536];
-        char[] text = new char[Encoding.UTF8.GetMaxCharCount(bytes.Length)];
-        Decoder decoder = new UTF8Encoding(false, true).GetDecoder();
         int count;
-        // Forward bounded available chunks, not an envelope/flush per file.
+        // Forward raw bytes as base64. The scanner's binary stream must reach the
+        // application unchanged, without a UTF-8 decode and JSON re-escape per frame.
         while ((count = stream.BaseStream.Read(bytes, 0, bytes.Length)) != 0)
         {
-            int length = decoder.GetChars(bytes, 0, count, text, 0, false);
-            if (length != 0 && !Send(new { type = kind, id = id, data = new string(text, 0, length) }))
+            if (!Send(new { type = kind, id = id, encoding = "base64", data = Convert.ToBase64String(bytes, 0, count) }))
                 throw new IOException("Scanner result connection is closed.");
         }
-        int finalLength = decoder.GetChars(bytes, 0, 0, text, 0, true);
-        if (finalLength != 0 && !Send(new { type = kind, id = id, data = new string(text, 0, finalLength) }))
-            throw new IOException("Scanner result connection is closed.");
     }
 
     private static void Complete(Process child, int id)
@@ -448,7 +443,7 @@ internal static class Program
             if (args.Length == 1 && args[0] == "--client") return RunClient();
             ContainScannerLifetime();
             connection = Connect(args);
-            Send(new { type = "ready", protocol = 2, childLifetimeContained = lifetimeJob != IntPtr.Zero });
+            Send(new { type = "ready", protocol = 3, childLifetimeContained = lifetimeJob != IntPtr.Zero });
             string line;
             while ((line = ReadRequest()) != null)
             {

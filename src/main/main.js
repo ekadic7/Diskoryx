@@ -730,6 +730,15 @@ async function validateScannedEntry(filePath) {
   }
 }
 
+ipcMain.handle('open-support-page', async () => {
+  try {
+    await shell.openExternal('https://ko-fi.com/edi969247');
+    return { success: true };
+  } catch (error) {
+    return { error: `Unable to open the support page: ${error.message}` };
+  }
+});
+
 ipcMain.handle('copy-path', async (_event, filePath) => {
   const target = resolveScannedFile(filePath);
   if (target.error) return target;

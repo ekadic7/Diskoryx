@@ -68,7 +68,7 @@ function createScanBroker(executable = getScanBrokerPath(), launch = spawn) {
           if (line.length > 1048576) throw failure('Oversized scanner broker response.');
           const message = JSON.parse(line);
           if (!state.ready) {
-            if (message.type !== 'ready' || message.protocol !== 2 || message.childLifetimeContained !== true) {
+            if (message.type !== 'ready' || message.protocol !== 3 || message.childLifetimeContained !== true) {
               throw failure('Scanner broker did not confirm its protocol and process containment.');
             }
             state.ready = true;
@@ -80,9 +80,15 @@ function createScanBroker(executable = getScanBrokerPath(), launch = spawn) {
             throw failure('Scanner broker returned an unexpected scan ID.');
           }
           if (message.type === 'stdout' || message.type === 'stderr') {
-            if (typeof message.data !== 'string') throw failure('Invalid scanner data.');
+            if (message.encoding !== 'base64' || typeof message.data !== 'string'
+              || message.data.length > 87384 || message.data.length % 4 !== 0
+              || !/^[A-Za-z0-9+/]*={0,2}$/.test(message.data)) throw failure('Invalid scanner data.');
             const stream = session[message.type];
-            if (!session.discard && !stream.write(message.data)) await once(stream, 'drain');
+            // Protocol 3 forwards raw scanner bytes as base64 so the binary MFT
+            // stream is never decoded, re-escaped and re-encoded three times.
+            const payload = Buffer.from(message.data, 'base64');
+            if (payload.length > 65536) throw failure('Invalid scanner data.');
+            if (!session.discard && !stream.write(payload)) await once(stream, 'drain');
           } else if (message.type === 'exit') {
             if (!Number.isInteger(message.code)) throw failure('Invalid scanner exit code.');
             finish(session, {

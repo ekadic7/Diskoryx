@@ -1,0 +1,57 @@
+{
+  "version": "1.0.2",
+  "date": "2026-10-21",
+  "scope": "Local Buffer copy only; no publication or original-project changes",
+  "scannerSha256": "BB1A991D3A4602558128BB5B709AEA4E4099D360181BCB73A4C7A8DE212522F7",
+  "protocol": 3,
+  "binaryFormat": "DXM2 version 2",
+  "regressions": {
+    "nodePassed": 278,
+    "rustPassed": 6,
+    "rustClippyWarnings": 0,
+    "testFirstEvidence": "New ownership, summary, input, transport and smoke-completion regressions failed before their corresponding fixes.",
+    "largeBinaryFixture": {
+      "inputFiles": 24000,
+      "inputFolders": 6002,
+      "includedFiles": 12000,
+      "includedFolders": 3001,
+      "checks": ["excluded subtrees", "compact parent IDs", "counted sizes", "cooperative yielding", "cancellation during import"]
+    }
+  },
+  "nativeParity": {
+    "baseline": "Original published scanner",
+    "stableFiles": 154,
+    "stableFolders": 6,
+    "countedBytesBefore": 16786258,
+    "countedBytesAfter": 16786258,
+    "allPathsAndFileMetadataEqual": true,
+    "coverage": ["hard links", "Unicode", "empty folders", "zero-length files", "16 MiB file", "junction", "pre-1970 modification time"]
+  },
+  "realElectronScans": [
+    { "files": 763107, "milliseconds": 4380.9807, "skipped": 0 },
+    { "files": 763108, "milliseconds": 3865.7109, "skipped": 0 },
+    { "files": 763108, "milliseconds": 3740.1531, "skipped": 0 }
+  ],
+  "packagedPayload": {
+    "applicationFilesCompared": 43,
+    "allApplicationFilesEqualToSource": true,
+    "bundledNativeImagesCompared": 3,
+    "localFontsAndD3Verified": true,
+    "realMftScanMilliseconds": 4196.529,
+    "realMftScanSkipped": 0,
+    "uiWorkflows": ["multi-location scans", "Create folder", "Copy/Paste", "Move", "Undo/Redo", "History", "text preview", "analysis", "live updates", "offline requests"],
+    "fullWorkflowPassed": true
+  },
+  "realRecycle": "Standalone disposable file/folder restore, occupied-path refusal and Undo-copy recovery passed.",
+  "observations": [
+    "Live C: counts can change because this is not an atomic volume snapshot.",
+    "The first scan request includes user-controlled UAC waiting; scan milliseconds exclude that wait.",
+    "Combining the real-Recycle conflict scenario with live notification scenarios races its deliberate external fixture changes; the documented standalone Recycle scenario passed.",
+    "One initial packaged combined run refused a staging operation with Access denied. The isolated workflow and a complete repeat including MFT passed; this transient refusal has no established root cause and is not claimed fixed.",
+    "This verifies packaged contents in an isolated Electron harness, not an installation/uninstallation on a separate Windows account.",
+    "The installer is unsigned."
+  ],
+  "publishedOriginal": {
+    "filesVerifiedUnchanged": 123
+  }
+}

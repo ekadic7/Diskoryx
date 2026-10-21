@@ -52,6 +52,7 @@ test('preview bridge preserves original APIs with preview and scan cancellation 
     .replace(/^[ \t]*(?:analysisPage|actionHistory|restoreName):.*\n/gm, '')
     .replace(/^[ \t]*(?:listSavedScans|activateSavedScan):.*\n/gm, '')
     .replace(/^[ \t]*volumeCapacity:.*\n/gm, '')
+    .replace(/^[ \t]*openSupportPage:.*\n/gm, '')
     .replace(/^[ \t]*moveHistoryAction:.*\n/gm, '')
     .replace(/^[ \t]*clearCopySelection:.*\n/gm, '')
     .replace(/^[ \t]*createFolder:.*\n/gm, '')

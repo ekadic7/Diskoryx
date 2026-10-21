@@ -1,0 +1,33 @@
+{
+  "date": "2026-10-21",
+  "operatingSystem": "Windows 11 Pro",
+  "build": "26300",
+  "cpu": "Intel Core i7-14650HX",
+  "memoryGiB": 31.8,
+  "drive": "C:\\",
+  "filesystem": "NTFS",
+  "diskModel": "SKHynix_HFS001TEJ9X115N",
+  "diskCapacityGiB": 954,
+  "busType": "NVMe",
+  "query": "diskoryx.svg",
+  "target": "C:\\workspace\\github\\Diskoryx V1\\src\\assets\\diskoryx.svg",
+  "targetExistedBeforeTesting": true,
+  "targetReadableByOrdinaryUser": true,
+  "windowsSearchService": "Running",
+  "order": ["explorer-1", "diskoryx-1", "explorer-2", "diskoryx-2", "explorer-3", "diskoryx-3"],
+  "cacheConditions": "No reboot or cache purge; exploratory searches preceded the recorded sequence. Warm/uncontrolled-cache measurements only.",
+  "diskoryxExecution": "Source smoke harness: hidden Electron, real renderer/preload/IPC, actual C: MFT scan and broker. A fresh scan before every lookup. Application startup excluded.",
+  "explorerExecution": "A separate ordinary Explorer window at C:, query set through its real search box followed by Enter; visible result row and exact Shell result path verified.",
+  "screenshotRun": 2,
+  "explorerFirstRunTimeoutLimitSeconds": 20,
+  "explorerOtherRunTimeoutLimitSeconds": 120,
+  "allRecordedExplorerRunsFoundTarget": true,
+  "excludedDiagnostics": "A search-ms navigation attempt did not enter Explorer search results. Its invalid timeout was discarded; no timing from that attempt appears in this report.",
+  "systemLogCheck": {
+    "target": "C:\\Windows\\SysWOW64\\config\\systemprofile\\AppData\\Local\\Intel\\SUR\\QUEENCREEK\\Updater\\AppData\\service.log",
+    "readableByKnownPath": true,
+    "parentEnumerationDenied": true,
+    "exampleDeniedParent": "C:\\Windows\\SysWOW64\\config\\systemprofile",
+    "includedInSpeedComparison": false
+  }
+}

@@ -2,7 +2,20 @@ const divider = document.getElementById('pane-divider');
 const panes = document.querySelector('.explorer-panes');
 const inspectorToggle = document.getElementById('inspector-toggle');
 const themeToggle = document.getElementById('theme-toggle');
+const supportButton = document.getElementById('support-btn');
 let capacityRequestId = 0;
+
+supportButton.addEventListener('click', async () => {
+  supportButton.disabled = true;
+  try {
+    const result = await window.electronAPI.openSupportPage();
+    if (!result.success) showAppMessage(result.error || 'Unable to open the support page.', 'Support page not opened');
+  } catch (error) {
+    showAppMessage(`Unable to open the support page: ${error.message}`, 'Support page not opened');
+  } finally {
+    supportButton.disabled = false;
+  }
+});
 
 function formatCapacity(bytes) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];

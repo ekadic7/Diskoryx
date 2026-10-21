@@ -36,6 +36,11 @@ test.after(async () => {
   if (root) await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
+function payload(message) {
+  return message.encoding === 'base64'
+    ? Buffer.from(message.data, 'base64').toString('utf8') : message.data;
+}
+
 async function broker(t) {
   const child = spawn(executable, [], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   const messages = [];
@@ -98,8 +103,8 @@ test('broker rejects arbitrary commands and paths, then streams two scans in one
     assert.equal(exit.code, 0);
     assert.equal(exit.cancelled, false);
     assert.equal(exit.error, null);
-    assert(b.messages.some(m => m.type === 'stdout' && m.id === id && m.data.includes('"summary"')));
-    assert(b.messages.some(m => m.type === 'stderr' && m.id === id && m.data.includes('progress')));
+    assert(b.messages.some(m => m.type === 'stdout' && m.id === id && payload(m).includes('"summary"')));
+    assert(b.messages.some(m => m.type === 'stderr' && m.id === id && payload(m).includes('progress')));
   }
 });
 
@@ -107,7 +112,7 @@ test('broker serializes scans, rejects stale cancellation and waits for the owne
   const b = await broker(t);
   b.send({ command: 'scan', id: 10, drive: 'D' });
   const data = await b.wait(m => m.type === 'stdout' && m.id === 10);
-  const pid = JSON.parse(data.data.trim().split('\n')[0]).pid;
+  const pid = JSON.parse(payload(data).trim().split('\n')[0]).pid;
   b.send({ command: 'scan', id: 11, drive: 'C' });
   assert.match((await b.wait(m => m.type === 'error' && m.id === 11)).error, /already active/);
   b.send({ command: 'cancel', id: 12 });
@@ -123,7 +128,7 @@ test('broker serializes scans, rejects stale cancellation and waits for the owne
 test('closing the command connection drains and terminates its active scanner', { timeout: 15000 }, async t => {
   const b = await broker(t);
   b.send({ command: 'scan', id: 20, drive: 'D' });
-  const pid = JSON.parse((await b.wait(m => m.type === 'stdout' && m.id === 20)).data.trim().split('\n')[0]).pid;
+  const pid = JSON.parse(payload(await b.wait(m => m.type === 'stdout' && m.id === 20)).trim().split('\n')[0]).pid;
   b.child.stdin.end();
   assert.equal(await b.completion, 0);
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
@@ -133,9 +138,9 @@ test('closing the command connection drains and terminates its active scanner', 
 test('forced broker termination also terminates its scanner without a graceful Stop', { timeout: 15000 }, async t => {
   const b = await broker(t);
   b.send({ command: 'scan', id: 21, drive: 'F' });
-  const pid = JSON.parse((await b.wait(m => m.type === 'stdout' && m.id === 21)).data.trim().split('\n')[0]).pid;
-  const descendantPid = (await b.wait(m =>
-    m.type === 'stdout' && m.id === 21 && m.data.includes('descendantPid'))).data.trim().split('\n')
+  const pid = JSON.parse(payload(await b.wait(m => m.type === 'stdout' && m.id === 21)).trim().split('\n')[0]).pid;
+  const descendantPid = payload(await b.wait(m =>
+    m.type === 'stdout' && m.id === 21 && payload(m).includes('descendantPid'))).trim().split('\n')
     .map(line => JSON.parse(line)).find(record => record.descendantPid).descendantPid;
   assert.doesNotThrow(() => process.kill(pid, 0));
   assert.doesNotThrow(() => process.kill(descendantPid, 0));
@@ -210,7 +215,7 @@ test('broker streams over a local pipe verified against the owning application P
   }
   assert.equal(exit.id, 50);
   assert.equal(exit.code, 0);
-  assert(messages.some(m => m.type === 'stdout' && m.data.includes('summary')));
+  assert(messages.some(m => m.type === 'stdout' && payload(m).includes('summary')));
   socket.end();
   assert.equal((await closed)[0], 0);
 });
@@ -248,7 +253,7 @@ test('unexpected application death terminates pipe broker and its active scanner
       lines.on('line', line => {
         const m = JSON.parse(line);
         if (m.type === 'ready') socket.write(JSON.stringify({command:'scan',id:60,drive:'D'})+'\\n');
-        if (m.type === 'stdout') process.stdout.write(JSON.stringify({scanner:JSON.parse(m.data.trim().split('\\n')[0]).pid})+'\\n');
+        if (m.type === 'stdout') process.stdout.write(JSON.stringify({scanner:JSON.parse(Buffer.from(m.data,'base64').toString('utf8').trim().split('\\n')[0]).pid})+'\\n');
       });
     }).listen(${JSON.stringify(`\\\\.\\pipe\\${name}`)}, () => {
       const child = spawn(${JSON.stringify(executable)}, ['--pipe',${JSON.stringify(name)},'--parent',String(process.pid)],
@@ -391,4 +396,45 @@ test('broker data envelopes preserve all controls, JSON metacharacters and Unico
   assert.equal(stdout.replace(/^\{"pid":\d+\}\r?\n/, ''), controls + '"\\/<>&\u2028\u2029\u010d\u65e5\ud83d\ude42');
   assert.equal(stderr.replace(/^fixture scanner progress\r?\n/, ''), '\0\t\r\n"\\\u010d\ud83d\ude42');
   assert.equal(result.code, 0);
+});
+
+test('adapter refuses malformed, oversized or unencoded protocol-3 data', { timeout: 15000 }, async t => {
+  const cases = [
+    { encoding: 'base64', data: '???=' },
+    { encoding: 'base64', data: 'a' },
+    { encoding: 'base64', data: '====' },
+    { encoding: 'base64', data: 'AA=A' },
+    { encoding: 'base64', data: 'A'.repeat(87384) },
+    { encoding: 'base64', data: 'A'.repeat(87388) },
+    { data: 'plain text' }
+  ];
+  for (let index = 0; index < cases.length; index++) {
+    await t.test(`invalid envelope ${index}`, async () => {
+      const value = cases[index];
+      const expression = value.data.length > 1024
+        ? `{encoding:'base64',data:'A'.repeat(${value.data.length})}` : JSON.stringify(value);
+      const script = `
+        process.stdout.write(JSON.stringify({type:'ready',protocol:3,childLifetimeContained:true})+'\\n');
+        require('node:readline').createInterface({input:process.stdin}).once('line', line => {
+          const command=JSON.parse(line);
+          process.stdout.write(JSON.stringify({type:'stdout',id:command.id,...${expression}})+'\\n');
+          process.stdout.write(JSON.stringify({type:'exit',id:command.id,code:0})+'\\n');
+        });
+        setInterval(()=>{},1000);
+      `;
+      const adapter = createScanBroker(executable, (_file, _args, options) =>
+        spawn(process.execPath, ['-e', script], options));
+      try {
+        const session = await adapter.start(null, '\\\\.\\C:');
+        session.stdout.resume();
+        session.stderr.resume();
+        const result = await session.completion;
+        assert.equal(result.code, 1);
+        assert.match(result.error.message, /Invalid scanner data/);
+        assert.equal(result.error.noFallback, true);
+      } finally {
+        await adapter.close();
+      }
+    });
+  }
 });
