@@ -345,9 +345,50 @@ async function run() {
     assert.equal(await js('currentResult?.scanMode'), 'mft');
     assert.equal(await js('currentResult?.fileCount > 0 && !scanInProgress'), true);
     assert.equal(await js('document.getElementById("scan-mode").textContent.includes("Fast")'), true);
+    const scanMeasurement = await js(`({
+      files: currentResult.fileCount, scanMs: currentResult.scanDurationMs,
+      requestToViewMs: performance.now() - ${scanReadyStarted}
+    })`);
     console.log('PASS: normal-user hidden Electron completed real administrator MFT scan.',
       await js(`JSON.stringify({files:currentResult.fileCount,ms:currentResult.scanDurationMs,
         requestToViewMs:performance.now()-${scanReadyStarted}})`));
+    const benchmarkTarget = process.env.DISKORYX_SMOKE_MFT_TARGET;
+    if (benchmarkTarget) {
+      const targetName = path.basename(benchmarkTarget);
+      const searchStarted = await js('performance.now()');
+      await js(`document.getElementById("search-input").value = ${JSON.stringify(targetName)};
+        document.getElementById("search-btn").click()`);
+      await waitFor(`treeTitle.textContent.endsWith("search results") &&
+        document.querySelector(".result-file-row small")`);
+      const searchResult = JSON.parse(await js(`JSON.stringify({
+        title: treeTitle.textContent,
+        found: Array.from(document.querySelectorAll(".result-file-row small"))
+          .some(item => item.textContent === ${JSON.stringify(path.resolve(benchmarkTarget))}),
+        searchMs: performance.now() - ${searchStarted}
+      })`));
+      assert.equal(searchResult.found, true, `Diskoryx search did not find ${benchmarkTarget}`);
+      console.log('PASS: Diskoryx in-app search found the exact benchmark target.',
+        JSON.stringify(searchResult));
+      if (process.env.DISKORYX_SMOKE_BENCHMARK_OUTPUT) {
+        const output = process.env.DISKORYX_SMOKE_BENCHMARK_OUTPUT;
+        await fs.writeFile(output, JSON.stringify({
+          application: 'Diskoryx source smoke harness',
+          measuredAt: new Date().toISOString(),
+          scope: 'C:\\', query: targetName, target: path.resolve(benchmarkTarget),
+          ...scanMeasurement, ...searchResult,
+          scanAndLookupMs: scanMeasurement.requestToViewMs + searchResult.searchMs,
+          pollingIntervalMs: 25
+        }, null, 2) + '\n', { flag: 'wx' });
+        window.setSize(1420, 900);
+        await new Promise(resolve => setTimeout(resolve, 200));
+        const rectangle = await js(`(() => {
+          const r = document.querySelector('.tree-pane').getBoundingClientRect();
+          return { x: Math.ceil(r.x), y: Math.ceil(r.y),
+            width: Math.floor(r.width), height: Math.min(360, Math.floor(r.height)) };
+        })()`);
+        await fs.writeFile(`${output}.png`, (await window.webContents.capturePage(rectangle)).toPNG());
+      }
+    }
     if (process.env.DISKORYX_SMOKE_MFT_REPEAT === '1') {
       for (let repeat = 0; repeat < 2; repeat++) {
         const before = await js('currentScanId');
@@ -650,6 +691,104 @@ async function run() {
     assert.deepEqual(requests, []);
     console.log('PASS: multi-drive selection/all/clear, sequential real fixture scans, independent cached switching, revision-bound Paste and single-location Rescan.');
     console.log('PASS: context Move, explicit destination picker switching saved roots, Move here, source removal, History return/redo and Cancel selection; no Windows picker, header Paste or extra scan.');
+  }
+  if (process.env.DISKORYX_SMOKE_CAPTURE_PRODUCT === '1') {
+    const screenshotDirectory = process.env.DISKORYX_SMOKE_PRODUCT_CAPTURE_DIR;
+    if (!screenshotDirectory) throw new Error('Product screenshot output directory is not configured.');
+    await fs.mkdir(screenshotDirectory, { recursive: true });
+    const demoRoot = path.join(temporaryRoot, 'product-demo');
+    const samples = [
+      ['Diskoryx overview.txt', 'Generated sample file for the Diskoryx product gallery.\n'.repeat(36)],
+      ['Disk report.csv', 'volume,files,category\nC,11,example\n'.repeat(52)],
+      ['Storage guide.md', '# Storage guide\n\nA generated sample document for screenshots.\n'.repeat(27)],
+      ['Documents/Getting started.md', '# Getting started\n\nExplore storage locally with Diskoryx.\n'.repeat(24)],
+      ['Documents/Release checklist.txt', 'Release checklist: validate, measure, document.\n'.repeat(42)],
+      ['Documents/Storage notes.txt', 'Sample notes about files, folders, and storage.\n'.repeat(58)],
+      ['Projects/diskoryx.config.json', JSON.stringify({ product: 'Diskoryx', offline: true, sample: true }, null, 2)],
+      ['Projects/scan-summary.csv', 'type,count,bytes\ntext,12,42800\nimages,4,125000\n'.repeat(32)],
+      ['Projects/scan-worker.js', 'function summarize(entries) { return entries.length; }\n'.repeat(95)],
+      ['Projects/theme.css', '.panel { border-radius: 12px; color: #b3a5ff; }\n'.repeat(86)],
+      ['Logs/scan-2026-01.log', 'INFO scan complete; files indexed locally\n'.repeat(120)],
+      ['Logs/scan-2026-02.log', 'INFO scan complete; no data uploaded\n'.repeat(175)],
+      ['Creative/brand-guide.svg', '<svg xmlns="http://www.w3.org/2000/svg"><title>Diskoryx sample</title></svg>\n'.repeat(72)],
+      ['Creative/layout-notes.md', 'A visual map of storage, sorted by file size.\n'.repeat(92)]
+    ];
+    for (const [relative, contents] of samples) {
+      const file = path.join(demoRoot, relative);
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, contents);
+    }
+    if (await js('!document.getElementById("clear-transfer").hidden')) {
+      await js('document.getElementById("clear-transfer").click()');
+      await waitFor('document.getElementById("clear-transfer").hidden');
+    }
+    await js(`runScan(id => window.electronAPI.scanFolder(${JSON.stringify(demoRoot)}, currentScanFilters, id))`);
+    await waitFor(`currentResult?.fileCount === ${samples.length} && !scanInProgress`);
+    window.setSize(1420, 900);
+    await waitFor(`Array.from(document.querySelectorAll('.virtual-tree-row.is-file'))
+      .some(row => row.textContent.includes('Diskoryx overview.txt'))`);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await js(`Array.from(document.querySelectorAll('.virtual-tree-row.is-file'))
+      .find(row => row.textContent.includes('Diskoryx overview.txt')).click()`);
+    await waitFor(`document.querySelector('.file-details-content')?.textContent.includes('Diskoryx overview.txt')`);
+    const prepareScreenshot = async () => js(`(() => {
+      const root = ${JSON.stringify(temporaryRoot)};
+      const replacement = 'C:\\\\Users\\\\Public\\\\Documents\\\\Diskoryx sample data';
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      while (walker.nextNode()) walker.currentNode.textContent = walker.currentNode.textContent.split(root).join(replacement);
+      diskTreemap.rootPath = replacement + '\\\\product-demo';
+      if (diskTreemap.frames[0]) {
+        diskTreemap.frames[0].name = diskTreemap.rootPath;
+        diskTreemap.frames[0].path = diskTreemap.rootPath;
+      }
+      diskTreemap.renderBreadcrumb();
+      document.getElementById('metric-duration').textContent = '—';
+      document.getElementById('metric-rate').textContent = 'Demo only; not benchmarked';
+      document.getElementById('files-loaded').textContent = 'Sample data · benchmark results not shown';
+      document.getElementById('disk-capacity-card').hidden = true;
+      document.getElementById('action-toast').hidden = true;
+      document.querySelector('.sidebar').scrollTop = 0;
+      return JSON.stringify({
+        duration: document.getElementById('metric-duration').textContent,
+        rate: document.getElementById('metric-rate').textContent,
+        path: document.getElementById('location-label').textContent,
+        containsTemporaryPath: document.body.innerText.includes(root),
+        capacityHidden: document.getElementById('disk-capacity-card').hidden,
+        toastHidden: document.getElementById('action-toast').hidden
+      });
+    })()`);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    for (const theme of ['light', 'dark']) {
+      await js(`if (document.body.dataset.theme !== ${JSON.stringify(theme)})
+        document.getElementById('theme-toggle').click();
+        document.activeElement.blur();`);
+      await new Promise(resolve => setTimeout(resolve, 120));
+      const state = JSON.parse(await prepareScreenshot());
+      if (state.duration !== '—' || state.rate !== 'Demo only; not benchmarked' ||
+          state.containsTemporaryPath || !state.capacityHidden || !state.toastHidden) {
+        throw new Error(`Unsafe or misleading screenshot state: ${JSON.stringify(state)}`);
+      }
+      await new Promise(resolve => setTimeout(resolve, 150));
+      await window.webContents.capturePage();
+      await new Promise(resolve => setTimeout(resolve, 200));
+      await fs.writeFile(path.join(screenshotDirectory, `overview-${theme}.png`),
+        (await window.webContents.capturePage()).toPNG());
+    }
+    await js(`document.querySelector('[data-view="largest"]').click(); document.activeElement.blur();`);
+    await waitFor('!document.getElementById("analysis-panel").hidden && document.querySelectorAll("#analysis-rows tr").length > 0');
+    const largestState = JSON.parse(await prepareScreenshot());
+    if (largestState.containsTemporaryPath) throw new Error('Screenshot contains a temporary user path.');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await fs.writeFile(path.join(screenshotDirectory, 'largest-files-dark.png'),
+      (await window.webContents.capturePage()).toPNG());
+    await js(`document.querySelector('[data-view="types"]').click(); document.activeElement.blur();`);
+    await waitFor('!document.getElementById("analysis-panel").hidden && document.getElementById("analysis-title").textContent === "File types"');
+    const typesState = JSON.parse(await prepareScreenshot());
+    if (typesState.containsTemporaryPath) throw new Error('Screenshot contains a temporary user path.');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    await fs.writeFile(path.join(screenshotDirectory, 'file-types-dark.png'),
+      (await window.webContents.capturePage()).toPNG());
+    console.log(`PASS: captured four Diskoryx product screenshots in ${screenshotDirectory}.`);
   }
 }
 

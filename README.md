@@ -4,6 +4,21 @@ Diskoryx is a Windows desktop disk-usage analyzer built with Electron and a loca
 
 This repository contains the V1 app, test suite, native helper sources, and the pinned MFT scanner executable required to run/build the Windows installer. The installer is built locally and is not committed to source control.
 
+![Diskoryx disk overview](docs/screenshots/overview-dark.png)
+
+*Diskoryx overview: scan summary, file tree, space map, and file inspector.*
+
+<p align="center">
+  <img src="docs/screenshots/largest-files-dark.png" alt="Diskoryx largest files view" width="49%">
+  <img src="docs/screenshots/file-types-dark.png" alt="Diskoryx file types view" width="49%">
+</p>
+
+*Browse the largest files or see how storage is distributed across file types.*
+
+Switch between the [dark](docs/screenshots/overview-dark.png) and [light](docs/screenshots/overview-light.png) appearances. These repository screenshots use generated sample files and placeholder paths; they do not show anyone's private files.
+
+To regenerate the gallery locally, install dependencies and run `node scripts/smoke.cjs --capture-product`. The capture uses an isolated temporary dataset and writes PNGs to `docs/screenshots/`.
+
 ## Run from source
 
 Use Windows x64, Node.js 22 or later, and a normal non-administrator PowerShell:
@@ -52,7 +67,7 @@ HTML, preload and native executable paths are resolved from the app/package, not
 
 ## Test
 
-`npm test` runs the complete regression suite. `npm run test:smoke` starts one hidden Electron instance with real renderer/preload/IPC and disposable files. `node scripts/smoke.cjs --multi-drive --paste-ui --live-pause` adds the in-app destination/Create folder/Move workflows, multiple-location switching, and real Windows notification checks using disposable fixtures. `node scripts/smoke.cjs --real-recycle` exercises real Recycle Bin behavior only on its own disposable files and restores its fixtures; it never empties the bin. `node scripts/smoke.cjs --mft` performs a real read-only C: MFT scan and requires the user to approve UAC. Do not run that opt-in command unattended.
+`npm test` runs the complete regression suite. `npm run test:smoke` starts one hidden Electron instance with real renderer/preload/IPC and disposable files. `node scripts/smoke.cjs --multi-drive --paste-ui --live-pause` adds the in-app destination/Create folder/Move workflows, multiple-location switching, and real Windows notification checks using disposable fixtures. `node scripts/smoke.cjs --real-recycle` exercises real Recycle Bin behavior only on its own disposable files and restores its fixtures; it never empties the bin. `node scripts/smoke.cjs --mft` performs a real read-only C: MFT scan and requires the user to approve UAC. Set `DISKORYX_SMOKE_MFT_TARGET` to an existing file on C: before running `--mft` to also time Diskoryx's exact-name search in the completed scan. Do not run that opt-in command unattended.
 
 ## Interface
 
