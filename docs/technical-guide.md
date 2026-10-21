@@ -1,0 +1,218 @@
+# Diskoryx technical guide
+
+[Back to the project overview](../README.md)
+
+Commands in this guide are run from the repository root.
+
+Diskoryx is a Windows desktop disk-usage analyzer built with Electron and a local MFT scanner. It analyzes files on the device, provides cached tree/space-map and file-type views, and includes guarded file actions. Scanning an NTFS volume uses a separate UAC-approved scanner broker; the UI and file actions run as the signed-in user.
+
+This repository contains the V1 app, test suite, native helper sources, and the pinned MFT scanner executable required to run/build the Windows installer. The installer is built locally and is not committed to source control.
+
+![Diskoryx disk overview](screenshots/overview-dark.png)
+
+*Diskoryx overview: scan summary, file tree, space map, and file inspector.*
+
+<p align="center">
+  <img src="screenshots/largest-files-dark.png" alt="Diskoryx largest files view" width="49%">
+  <img src="screenshots/file-types-dark.png" alt="Diskoryx file types view" width="49%">
+</p>
+
+*Browse the largest files or see how storage is distributed across file types.*
+
+Switch between the [dark](screenshots/overview-dark.png) and [light](screenshots/overview-light.png) appearances. These repository screenshots use generated sample files and placeholder paths; they do not show anyone's private files.
+
+To regenerate the gallery locally, install dependencies and run `node scripts/smoke.cjs --capture-product`. The capture uses an isolated temporary dataset and writes PNGs to `docs/screenshots/`.
+
+## Run from source
+
+Use Windows x64, Node.js 22 or later, and a normal non-administrator PowerShell:
+
+```powershell
+npm ci
+npm test
+npm start
+```
+
+`npm ci` restores the locked development dependencies. The installed app does not require Node.js or a network connection. The first NTFS drive scan may request UAC for the scanner worker. Declining UAC reports the failure rather than silently starting slow filesystem traversal. Browse Folder does not request UAC.
+
+## Support Diskoryx
+
+Diskoryx is free to use. If you find it useful, you can [support its development on Ko-fi](https://ko-fi.com/edi969247). Support is entirely optional and does not unlock features.
+
+The sidebar support card above **Free space** opens that same page in your default browser only when clicked. Optional payments are handled outside the application through PayPal on Ko-fi. Diskoryx does not embed payment forms, store payment credentials, or contact those services automatically; disk analysis remains offline.
+
+## Build the Windows installer
+
+On Windows x64, with dependencies installed and the .NET Framework 4.x x64 C# compiler available, run:
+
+```powershell
+npm run build:installer:win
+```
+
+This builds the ordinary-user file-action helper and scan broker, verifies that the bundled MFT scanner matches its pinned SHA-256, then creates a per-user x64 NSIS installer at `Installation files/Diskoryx-Setup-1.0.1.exe`. The installer does not require administrator rights; Diskoryx requests UAC only for NTFS MFT scans. It is unsigned, so Windows SmartScreen may display a warning. Test the installer on a disposable/test account before sharing it.
+
+The installer includes the MFT scanner and both native helpers as Electron resources. Build-time output and helper executables are ignored by Git; the pinned MFT scanner binary is included in the repository so a clean checkout can package the same approved scanner image. The Rust source and lockfile are retained for reference, but rebuilding the MFT binary is not part of the V1 installer build.
+
+Diskoryx's Windows executable, shortcuts, and app/taskbar window use the bundled icon in `src/assets/diskoryx.ico`.
+
+## Project layout
+
+```text
+src/main/                    Electron lifecycle, scanners, cached views and guarded actions
+src/preload/                 Explicit context-isolated IPC bridge
+src/renderer/                UI components and styles
+native/file-actions/         Windows handle-based file actions (C# source)
+native/scan-broker/          Normal-user bridge and UAC scan worker (C# source)
+native/mft-scanner/bin/      Pinned MFT scanner included by the installer
+mft-scanner/                 Rust scanner source and lockfile
+tests/                       Node regression tests and disposable fixtures
+scripts/                     Native builds, smoke runner and packaging checks
+Installation files/          Installer handoff folder and local release installer
+.github/                     Bug/feature issue forms for test feedback
+package.json                 Runtime metadata, locked dependencies and installer config
+package-lock.json            npm dependency lock
+```
+
+HTML, preload and native executable paths are resolved from the app/package, not the launching shell's current directory. Font Awesome and D3 are bundled locally; the installed app makes no CDN requests. The app stores history/settings in its own `%APPDATA%\Diskoryx V1` data folder. On first launch, close the previous app and Diskoryx copies action history and local scan-filter storage from its profile if present, leaving the original data untouched.
+
+## Test
+
+`npm test` runs the complete regression suite. `npm run test:smoke` starts one hidden Electron instance with real renderer/preload/IPC and disposable files. `node scripts/smoke.cjs --multi-drive --paste-ui --live-pause` adds the in-app destination/Create folder/Move workflows, multiple-location switching, and real Windows notification checks using disposable fixtures. `node scripts/smoke.cjs --real-recycle` exercises real Recycle Bin behavior only on its own disposable files and restores its fixtures; it never empties the bin. `node scripts/smoke.cjs --mft` performs a real read-only C: MFT scan and requires the user to approve UAC. Set `DISKORYX_SMOKE_MFT_TARGET` to an existing file on C: before running `--mft` to also time Diskoryx's exact-name search in the completed scan. Do not run that opt-in command unattended.
+
+## Interface
+
+- Dark graphite workspace with indigo accents, compact controls, local system fonts, and a light/dark theme switch.
+- Live scan summary, hierarchical file table, linked space map, and file inspector with bounded text preview.
+- Largest Files and File Types analysis views with filtering, sorting, paging and drilldown.
+- One drive-selection control, cached results per completed location, per-location rescan, and in-app Copy/Move destination selection.
+- History for Rename, Recycle, Copy and Move; guarded restore/Undo/Redo actions with conflict refusal and no-overwrite behavior.
+- Sidebar capacity card reports actual free/total space for the active scanned volume, separate from logical file sizes.
+- Best-effort live updates reconcile external filesystem changes without triggering a full scan per notification.
+
+## Multiple drives and saved results
+
+The single **Choose drives** control under Scan locations opens a checklist for one, several or all drives; there is no second competing drive selector. **Select all** and **Clear** affect the checklist; **Use selected drives** applies it, and **Scan N drives** scans that selection sequentially with the same Scan filters. The first NTFS scan may request UAC; subsequent scans reuse the scan-only broker. **Stop scan** stops the active scan and discards the remaining queue. An error also stops the queue and identifies the failed location; previously completed results remain available. Rescan refreshes only the location being viewed, not the whole selection.
+
+**Location**, beside the Storage explorer heading, switches among completed disk or Browse Folder snapshots without launching either scanner. The separate sidebar "Saved results this session" card is removed. Each location keeps its own tree, file totals, filters, sort order and guarded-action changes; rescanning replaces only that location. Switching assigns a new active revision so old folder/preview/action requests are refused rather than applied to another disk. Selecting **Copy** or **Move** shows the selected item and a prominent **Choose where to copy... / Choose where to move...** button beside the tree. **Location** keeps its original meaning; it is not itself a folder destination picker. **Cancel selection** clears the transfer selection without touching files.
+
+The **Choose destination folder** dialog stays inside Diskoryx. It shows the source path, a dropdown of scanned disks/locations, folder-only navigation, **Up one folder**, the full selected destination path, and an explicit **Copy here / Move here** button. Click a folder once to open it; an empty folder is a valid destination. Opening/navigating the dialog does not transfer anything. Cancel/Escape preserves the transfer selection without copying or moving files. Switching locations uses the existing saved-scan activation and changes the underlying active view without rescanning; cancelling does not switch that view back. Unscanned locations require cancelling and using Scan/Browse a folder first, retaining the selection. Folder listing is paged in batches of at most 200, ignores view extension filters, and only exposes folders present in the snapshot. **New folder** creates a directory inside the currently selected destination and opens it in the picker; it does not start the transfer. The confirmed destination is still the existing revision-bound folder ID, not an arbitrary renderer-supplied path. Stale/load failures disable confirmation and report the error. Live snapshot updates refresh the navigator at its chosen folder and bind confirmation to the new revision; a removed folder reports an error rather than redirecting the transfer.
+
+Right-click a folder in the explorer or Space map to **Create folder inside** it. Right-click empty space to create inside the current Space map folder, or the scanned root when the map is at its root. Folder creation stays in the context menu rather than taking permanent toolbar space. The destination picker keeps its own **New folder** control. All entry points use a themed name dialog and the guarded Windows file-action helper: invalid/reserved names, existing items, stale scans and redirected links/junctions are refused, existing data is never overwritten, and protected locations do not trigger elevation. Successful creation updates the in-memory tree, totals and active revision without rescanning the scanned root. If the snapshot cannot be updated, Diskoryx asks for a Rescan rather than showing a stale view.
+
+When an MFT scan cannot be used but the fallback filesystem traversal succeeds, the scan-mode badge reports that fallback without presenting the low-level MFT parser error as if the overall scan failed; the detailed cause remains in the local application log.
+
+Only the active fresh scan is watched. Returning to an inactive result uses a saved snapshot that may not include changes made while it was inactive; Rescan that location to refresh it and restart monitoring. Watcher state is no longer shown in the footer. Saved results are held in memory, not persisted across app restart, and retaining several large disks increases RAM usage. The application does not pretend to provide a combined multi-volume scan or continuously watch every retained disk.
+
+`node scripts/smoke.cjs --multi-drive --paste-ui --live-pause` exercises subset/all/clear, sequential scanning, cached switching, context Copy/Paste and Move, History return/redo, Cancel selection and per-location Rescan using three disposable local folders as drive-list fixtures. It runs the actual scanner/renderer/preload/IPC and file-action helper without scanning user disks or requiring UAC. This validates the workflow, not physical multi-SSD performance or a transfer across physical volumes.
+
+Cross-volume Move stages files on the destination and verifies published file hashes and folder contents before retiring the source; it does not assume file IDs survive the final rename. Filesystems such as FAT32 that report alternate-stream enumeration as unsupported remain usable for ordinary files. Physical acceptance on a removable FAT32 volume verified file and populated-folder moves in both directions, plus History return/redo; automated forced cross-volume tests still use same-volume fixtures.
+
+## Independent analysis views
+
+**Largest files** and **File types** now open their own sidebar sections, not a renamed overview/treemap. Both read the current cached scan, honor active extension filters, support path search, minimum logical size in MiB, size/name ordering and pages of 100 rows. Largest files also supports newest-modified order. Reset clears the section filters. No scan starts when switching views or changing these filters.
+
+Largest files lists all matching paths in descending logical size (not only a Top 100). Names open the item in overview/Inspector; right-click retains the normal guarded actions. Hard-link aliases show their logical size separately, while counted bytes remain deduplicated according to the scanner snapshot. File types groups matching paths by extension and shows file count, counted logical bytes, percentage and largest logical file. Clicking an extension opens its files in Largest files. These are not allocated "Size on disk" values. Paging reuses one bounded derived index instead of sorting the entire disk for every next page; filter changes and scan/file-action revisions rebuild it.
+
+Size order also shows eight relative horizontal bars for the largest matching files; the largest is 100%, not a percentage of disk capacity. Click/right-click retains the file's normal navigation/actions. The graph is hidden for File types and name/date order. Analysis uses stable native block sorts and cooperative immediate-yield merges instead of timer-based full merge sorting. A local synthetic 850,000-file comparison measured the old sort alone at 13,203 ms and new filtering plus sorting at 479 ms, with matching first result. Regression coverage checks complete size/name/date ordering parity, stable ties across blocks and one million files within five seconds while yielding to the event loop. These are analysis-view measurements, not MFT scan timings.
+
+The Rust source, manifest and lockfile are included alongside the pinned MFT executable. The distributed scanner is verified against `native/scan-broker/ScannerIdentity.cs`; it is not rebuilt by the installer script. True allocated Size on disk is not currently available and is never estimated or substituted with logical size.
+
+## Read-only file preview
+
+Select a file in the tree, search results, or space map, then choose **Open file preview** in the Inspector. The larger reading window supports First / Previous / Next / Last, a page-number jump, Reload and line wrapping. Escape or the close button returns to the explorer.
+
+Every page reads at most 64 KiB plus a few bytes to preserve Unicode characters across boundaries. All pages are accessible, including the end of a large log; the app never reads the entire log into memory. Page boundaries are byte-based and may split a line. The footer reports the byte range and encoding. Text is selectable/copyable but cannot be edited or executed.
+
+Supported filenames include TXT, LOG, JSON/JSONL, YAML, INI, CONF/CONFIG/CFG, TOML, XML, CSV, Markdown, properties, `.env` variants, `.gitignore`, `.editorconfig`, README, LICENSE, Dockerfile and Makefile. UTF-8 (with or without BOM) and UTF-16 LE/BE (with BOM) are supported. Binary-looking content and unsupported encodings show an explicit error rather than an unsafe rendering or garbled fallback.
+
+Numbered logs such as `log1`, `log.1`, `app.log1` and `app.log.1` are also supported. Additional text formats include HTML/HTM/XHTML, CSS/SCSS/Sass/Less, JS/MJS/CJS/JSX, TS/TSX, Vue/Svelte, SQL, shell/PowerShell/batch scripts, Python, Ruby, PHP, Java, C/C++ headers and source, C#, Rust, Go, Swift, Kotlin and Lua. HTML and scripts are shown only as literal source text: no scripts run, no page is rendered, and linked images/styles/resources are not loaded. DLL/EXE and compressed logs (for example `.log.1.gz`) are not supported by this text reader; renaming binary data to a supported extension does not bypass content checks.
+
+Preview access is limited to regular files in the active scan, and resolved paths must remain inside its root. Missing/inaccessible files and expired scans show errors. File changes detected during reading or between pages stop paging; **Reload** reads the current file from page one. There is no automatic log following, syntax execution, file editing, or external service access. Config files may contain secrets: their contents stay local.
+
+Test by browsing a folder containing a small TXT/config file and a log larger than 64 KiB. Open each preview, use Next/Last and a page jump, toggle wrapping, and close with Escape. An unsupported or binary file should show a clear message without affecting the scan.
+
+## File-action safety
+
+Rename and Move to Recycle Bin require an active scan ID and membership in that scan. Actions are serialized with scans and each other. The backend rejects links/junctions anywhere along the path, paths outside the scan, redirected canonical paths and changes to file/ancestor identities detected between initial validation and execution. Windows device names, invalid names and existing rename destinations are rejected. Recycling requires confirmation (Cancel is the default); failure never falls back to permanent deletion.
+
+Recycle confirmation uses the application's own modal and follows its light/dark theme, rather than a native Windows message box. The path is displayed as literal text, Cancel starts focused, and Escape cancels. The main process owns a single-use confirmation token scoped to the requesting window; stale/foreign replies cannot confirm it. Closing/reloading the window or waiting two minutes cancels. Path and identity checks run again after confirmation, before the existing Windows recycle API is called.
+
+Recycle failures, Explorer/copy-path errors and CSV export messages also use an app-themed dialog instead of native JavaScript alerts. OK starts focused and Escape dismisses it; long messages scroll and paths/error text are rendered literally. Rename validation remains inline in its themed form so the entered name can be corrected. Error handling is unchanged: uncertain recycle completion still requires an explicit Rescan, and dismissing a message does not retry or perform a scan. Native file/folder picker dialogs remain Windows dialogs.
+
+Successful actions update the in-memory snapshot without running either scanner again. Rename updates descendant paths and extension statistics; recycling removes the scanned subtree and its counted bytes/files/folders from ancestor totals, search and CSV. A new snapshot revision rejects stale requests. The table keeps its sort/search and reveals the changed item or surviving parent; the map keeps its folder when available. Preview selection is refreshed. External changes use bounded incremental live updates described below; when monitoring pauses, only explicit Rescan rereads the whole root. Duration, rate and skipped/reparse counters still describe the original scan. MFT hard-link byte ownership remains as recorded in that snapshot: removing the counted path does not reassign ownership to other aliases or claim those bytes were physically freed.
+
+Rename now uses a Windows helper that opens the selected item with DELETE access, denying write/delete sharing for that item. Ancestors are opened with directory-list access and no delete sharing, preventing their renaming/removal while still allowing directory writes needed to move children. Attribute-only directory handles were insufficient to enforce this lock, so the tests explicitly try replacing ancestors independently of the leaf. The helper rejects reparse points, verifies handle-resolved paths, item types and exact integer file identities against the action's initial validation, then waits for the main process to authorize commit. `SetFileInformationByHandle` renames the opened item with replacement disabled: an occupied destination is refused by Windows even if it appeared after validation. Existing incompatible open handles cause a visible refusal rather than weaker fallback. All handles close after success, cancellation or failure. These are action-time identities, not identities recorded at scan time. If helper completion becomes uncertain, the snapshot is invalidated and an explicit Rescan is required; a new scan is never started automatically.
+
+Rename filesystem work uses **standard-user effective rights**. A normally launched helper retains the user's ordinary token. When launched elevated under UAC, it obtains the Windows desktop shell's token, verifies the same account SID and session, and rejects an elevated/administrator desktop identity. It duplicates that token for impersonation **before opening filesystem handles**, verifies the effective token again, and retains it through handle cleanup. There is no process-name search or switch to a different account. The main process requires the helper to confirm this before authorizing Rename, so an incompatible helper is refused with a local rebuild instruction. If a matching non-administrator desktop session/token is unavailable, the action fails explicitly rather than using elevated access. Access-denied errors explain that protected items are refused. There is no administrative retry/override for Rename.
+
+The current application requires ordinary-user startup; Electron, previews, Rename and shell recycle therefore retain ordinary-user rights while only the scan worker is elevated. The older Rename impersonation guard remains defense in depth when its standalone helper is invoked from an administrator terminal; impersonation alone is not a process boundary. There is no administrative override for protected file actions. Remaining recycle path/descendant races are not solved by lowering process privileges.
+
+Manual check for this subsection: scan a disposable folder, rename a file and a populated subfolder, and confirm child paths/search update without scanning. Try an occupied destination and confirm both existing items remain intact. Names containing Unicode and files without extensions should still work. If an editor or another process has an incompatible write/delete handle open, close that handle and retry after the visible error. Test on disposable files rather than Java/platform or system folders. The native tests exercise real Windows locks, substitutions and destination collisions only inside temporary fixtures.
+
+For file actions, launch Diskoryx normally and rename your own disposable file/folder. The standalone `node --test tests/windows-rename.test.js` can additionally run from an administrator terminal: its disposable administrator-only ACL test must still refuse Rename, restoring only its own temporary folder's ACL afterward. Do not test by renaming Windows/system files.
+
+Move to Recycle Bin now holds the same no-delete-sharing ancestor handles across the asynchronous Windows shell call, after the app confirmation. This prevents the tested ancestor rename/removal-and-junction substitution; validation runs again while those handles are held. The leaf is verified by the helper but its handle must be released before shell recycling, so **the leaf can still be replaced** in that interval. Directory write sharing is necessary for child operations; the guard is not a promise against every reparse-data/content change. For a selected folder its changing descendants are not frozen. This is NOT a race-proof Windows recycle boundary.
+
+The guard does not time out after the shell operation is issued: locks remain until it settles, and requests stay serialized. Failed or uncertain issued operations invalidate the snapshot and require explicit Rescan, because shell failures can be partial; there is no automatic scan or permanent-delete fallback. Recycle inherits the ordinary application's permissions, not the separate broker's privileges. Do not use modifying actions on adversarial/shared trees. These protections do not make the app a security boundary, and no guarantee is made that dependencies or native binaries are vulnerability-free.
+
+Confirmation replies are bound to their exact request ID. A delayed response/error or queued browser `close` event from an earlier confirmation cannot dismiss, disable or answer a newer dialog. Regression tests cover these event orders; six consecutive real Electron runs also exercised Cancel followed by a new confirmation, Copy/Move/History and live updates.
+
+## Architecture and limitations
+
+Privilege separation requests UAC on the first NTFS drive scan and reuses a dedicated scanner broker until app exit. UI, previews, Rename, Copy, Move and recycle actions run as the ordinary user. The broker accepts bounded scan/cancel requests for a drive letter, not arbitrary executable paths, arguments or file actions. Declining UAC or losing the broker reports an error rather than silently starting a slow fallback.
+
+`mft-scanner.js` parses scanner records and builds the in-memory tree. `mft-broker.js` streams bounded UTF-8-safe chunks over a persistent local native bridge; it does not create temporary scan dumps or open a network listener. `native/scan-broker/Program.cs` verifies its local named-pipe peer, runs only the pinned scanner image, and contains its worker lifecycle in a Windows Job Object. These controls are not a sandbox or an immutable trust boundary.
+
+Action History is saved locally in `action-history.json` under `%APPDATA%\\Diskoryx V1`. It retains at most 500 actions or 16 MiB. Successful Rename, Recycle, Copy and Move operations are recorded; records are not uploaded. History writes use a temporary file and replace only after writing succeeds, but this is not a crash-recovery journal. A process or power failure between a file action and its history write may leave an unrecorded action.
+
+Remaining limits include best-effort (not lossless) Windows filesystem notifications, no true allocated “Size on disk” metric, unsigned Windows binaries, and filesystem race conditions outside the guarded operations described above. The MFT scanner is pinned by SHA-256, but hashes do not establish publisher identity or guarantee that software is vulnerability-free. Further scan-speed optimization is deferred; timings vary with volume, cache and hardware.
+
+## Test feedback
+
+Use the Bug report or Feature request form in GitHub Issues. Include the app version, Windows version, concise reproduction steps, expected behavior and actual behavior. Do not attach scanned documents or unredacted paths, usernames, volume labels or logs. See [CONTRIBUTING.md](../CONTRIBUTING.md) before proposing code changes.
+
+## Publish a tested release
+
+Keep source changes and review in the repository. After building and testing the installer, create a GitHub Release for the version, attach `Installation files/Diskoryx-Setup-1.0.1.exe`, and include the SHA-256 checksum and unsigned-installer warning in the release notes. Ask testers to report problems through Issues and to include their Windows and Diskoryx versions.
+
+**Copy/Paste:** right-click a scanned file/folder and choose **Copy file / folder**. Use **Choose where to copy...** beside the tree, open the target folder in the in-app destination dialog and confirm **Copy here**. Alternatively, navigate inside Diskoryx and use context **Paste into this folder** on a folder or blank space. The header **Paste here** is removed; blank-space Paste targets the folder currently open in the Space map. No Windows destination picker or Explorer window opens. The destination must be a folder in the current scan; select another completed root in the dialog, or scan/browse that root first while retaining the transfer selection. The backend resolves a current revision-bound folder ID, never a renderer-supplied arbitrary destination path. This is an internal Diskoryx selection, not Windows clipboard integration. Copy never removes the original. The native helper uses ordinary rights, pins source/destination ancestors, refuses reparse points (including descendants), holds source read handles against writes/deletion, streams in bounded buffers, and publishes a randomized sibling staging item with a no-replace move only after completion. Cancel/Escape cancels cooperatively and removes only identity-matched items created by that operation, never recursively deleting destination contents. Failed cleanup reports the precise staging path for inspection. A killed process/power loss may leave staging; it is not silently deleted on next launch.
+
+One operation is limited to **4096 entries**, including directories, so file/handle/memory use is bounded. Larger folders are refused before staging rather than partially copied. Copying into the source's own parent automatically chooses **name - Copy.ext**, **name - Copy (2).ext**, etc., preserving the extension; folders use the same numbering without an extension. It checks up to 1000 candidate names and still publishes with no replacement, so a racing collision is refused rather than overwritten. Other destination collisions remain explicit refusals. Redo keeps the recorded copy name rather than generating another one. This implementation copies primary file data and file modification times, not Windows ACL/attribute/hard-link topology/sparse-allocation metadata; copied hard links become independent files. To avoid silently dropping protected data, **alternate data streams and EFS-encrypted items are explicitly refused**, not copied incompletely; use Windows Explorer for them. The implementation is not a backup/imaging tool or a boundary against an attacker controlling the same user's writable staging area.
+
+Successful copies appear in persistent History. **Undo copy** first asks with the app-themed recycle confirmation, then compares the complete bounded copy receipt (identities, creation/modification metadata and SHA-256 file content). Edited/replaced copies or added/removed descendants are refused before calling the shell, without invalidating the scan. An accepted Undo sends only the unchanged copy to Windows Recycle Bin, never permanently deletes it or removes the source. **Redo copy** makes a new copy from the same identity-bound original as it exists now; it does not restore the old copy from the bin. Conflicts remain refused. Both keep copied paths/totals synchronized when their parent exists in the current snapshot, reading only the newly copied subtree, never rescanning the drive. Copies outside the scan do not alter its totals. Existing recycle leaf/descendant races described above still apply to Undo; it is not race-proof on adversarial/shared trees.
+
+**Move:** select **Move file / folder**, press **Choose where to move...** beside the tree, open the destination folder in the dialog and confirm **Move here**. Context Paste remains available as an alternative. Moving to the existing parent is refused as a no-op; occupied names are never overwritten. Same-volume moves rename the identity-bound leaf handle, preserving the filesystem object. Cross-volume moves use bounded native staging, flush and SHA-256 verification, publish without replacement, then lock/reverify the published destination before retiring only opened source entries bottom-up. Hard-link aliases are refused; the cross-volume path also refuses links/junctions, EFS and alternate streams instead of losing their data. Cross-volume metadata limitations are the same as Copy. A new source child prevents removal of that directory, not deletion of the unrecognized child.
+
+Before publication, cancellation removes only this operation's own staged items and leaves sources intact. Once destination verification completes, source cleanup must finish rather than honor a late cancellation; the dialog explicitly disables Cancel for this phase. Cleanup failure reports the destination path, retains the verified destination, marks the outcome uncertain and invalidates snapshots; inspect both locations before retrying. This is not a filesystem transaction, crash-recovery journal or guarantee of rollback after partial source cleanup. Successful Move clears the selection and updates retained source/destination snapshots; saved roots inside a moved folder are removed rather than left under a nonexistent path.
+
+Move History offers **Return to original location**, then **Redo move**. Each verifies the unchanged bounded content receipt and both the current source and target-parent identities; no conflicting target is replaced and missing/renamed/replaced parents are not recreated. Records survive app restart. Tests cover same-volume files/folders, unchanged identities, no-overwrite, cancellation, restart, cache changes and refusal of edited contents/replaced parents. Physical acceptance on a removable FAT32 volume verified file and populated-folder moves in both directions, including History return/redo; automated forced cross-volume tests still use same-volume fixtures.
+
+**Restore from Recycle Bin:** completed Recycle history entries offer this button for items deleted by Diskoryx. Lookup is restricted to the invoking user's `$Recycle.Bin\<SID>` on the original volume. It reads bounded supported Windows `$I` metadata (v1/v2), requires the original path and the original item's exact volume/file identity on its paired `$R` item, and refuses absent/ambiguous/replaced matches rather than guessing by name/date. The original parent chain must still match and the original destination must be free; missing/renamed parents are not silently recreated. A normal-rights native helper pins both paths and exact metadata, revalidates before commit, and moves only the opened recycled item with no replacement. It removes only that item's pinned metadata and asks Windows to refresh bin display. There is no bin-wide restore/empty operation or UAC.
+
+Restored files/folders update the cached snapshot by reading only their subtree when the parent is present. Restoring outside the current scan does not change that scan. Missing bin entries report that the item may already be externally restored or removed. If the metadata format/permissions differ or the original path/parents conflict, restore manually in Windows; the app does not bypass those refusals. The optional `--real-recycle` hidden smoke exercises a real disposable file and populated folder round trip, including cache totals, without user files. It restores its exact earlier Undo-copy fixture as targeted cleanup before deleting its temporary tree; it never empties the bin or cleans unrelated entries. Returning a moved item to its original location is a separate Move feature, not implicit in Copy.
+
+**Live updates:** after a successful scan, one nonpersistent recursive Windows filesystem watcher monitors that root, not one watcher per folder. It coalesces notifications for 300 ms and waits for scans, exports and file actions to finish before reconciliation. It updates cached additions, removals, file sizes/times, external renames and returned folders (including the filesystem arrival produced by an external bin restore), reading only affected new subtrees. Tree/search/analysis totals receive a new revision; a full drive scan is never launched for each event. A revision-bound path index is reused across batches and rebuilt after unrelated app mutations.
+
+Unchanged hard-link notifications no longer pause monitoring merely because an alias exists; changed aliases still pause rather than inventing ownership. This is **best-effort Windows notification monitoring**, not a lossless USN journal or a transactionally frozen scan. The queue is bounded to 512 distinct paths and new/returned subtrees to 4096 entries. Missing filenames/overflow, watcher errors, inaccessible/redirected paths, oversized subtrees or hard-link changes explicitly stop monitoring. They **do not discard the saved scan or break folder navigation**: tree/map, sorting, search, analysis and snapshot CSV remain available. Existing values describe the saved snapshot, not verified current disk state; explicit Rescan refreshes it. Guarded file actions still validate current paths, identities and permissions before touching disk. No silent filesystem fallback, fabricated hard-link ownership or background full scan is used. Drive-wide monitoring needs manual acceptance under the real workload; protected/system changes can legitimately pause it.
+
+Watcher-loss reporting waits for the current file action/scan/export to settle. If notifications fail during an asynchronous reconciliation batch, that batch is marked obsolete and cannot publish a fresh revision over the stale notification. Failed/interrupted batches roll back their in-memory changes, preserving the previous file/folder IDs, child lists, totals and hard-link accounting rather than leaving partial results. Only affected folders and array references are recorded for rollback; the full drive tree is not cloned for every notification. The renderer also defers updates while a context menu is open and discards queued revisions overtaken by a completed app action, rather than replacing its newer snapshot with an expired one.
+
+`node scripts/smoke.cjs --live` exercises real Windows notifications for external creation, resize, rename, deletion and arrival/removal of a populated folder, verifying cache totals without another full scan. Default smoke isolates notification handling for deterministic action/preview tests; monitor/reconciliation unit tests separately cover queue overflow, missing filenames, serialization and hard-link refusal.
+
+`node scripts/smoke.cjs --live-pause` additionally triggers a real watcher pause using an owned temporary hard-link fixture, then verifies saved-snapshot folder paging, analysis, export availability and guarded Rename/Recycle without rescanning. Add `--mft` only with the user available to approve UAC: it also verifies actual C: MFT folder browsing with drive-wide notifications enabled. The real-recycle smoke restores a disposable item before any Copy/Undo operation, checking that restore is registered at startup; repeated Undo cannot register duplicate IPC handlers.
+
+Further scan-speed optimization is deferred to V2 and is not an installer prerequisite. Scan duration depends on drive type, file count, cache state, filters and hardware; any future comparison must record those conditions and verify that the complete result remains correct.
+
+`node scripts/smoke.cjs --paste-ui` exercises folder Copy, in-app destination navigation, blank-area Paste, original preservation and collision refusal. Add `--live-pause` to exercise real notifications and saved-snapshot safety too. Optional `DISKORYX_SMOKE_CAPTURE` points to an existing local directory for dark/light History screenshots. Smoke browser caches are isolated under each disposable fixture so parallel checks do not contend for the user's Electron caches.
+
+## Stopping a scan
+
+The status next to the scan statistics shows **Fast · MFT** or **Standard · Filesystem** during progress and after completion. Standard scans indicate that filesystem traversal was used; the detailed MFT failure is retained in the local application log. The mode describes the scanner used, not a measured speed or a guarantee of access to every file. Sorting and cached views retain it; cancellation restores the last completed scan's mode. The first drive scan requests UAC separately for the broker; Browse Folder stays ordinary-user filesystem traversal.
+
+Only one scan can run at a time. Scan, Browse, Rescan and conflicting view controls are disabled during a scan; the main process also rejects overlapping requests. Progress is tagged with the originating request so late updates cannot overwrite a later scan's counters.
+
+Choose **Stop scan** in the sidebar to cancel. The button shows **Stopping...** until cleanup finishes: the MFT helper process is terminated and its close is awaited, or the standard scanner stops scheduling work and drains its pending filesystem calls. Cancellation also works during tree aggregation. Stopping an MFT scan never starts the standard fallback. Closing the window cancels its owned scan.
+
+Incomplete results are discarded. The last completed scan remains available, if there was one; otherwise the empty state is shown. A new scan can start after cleanup. Genuine MFT failures still use the existing filesystem fallback.
+
+Test from a normal PowerShell: Scan drive, approve the first UAC prompt, stop while scanning, then start again and allow it to complete. The second scan must not request another UAC prompt. Check that there is only one progress stream, controls recover, and totals/tree navigation still work after completion. Close Diskoryx, reopen it and confirm a new drive scan requests UAC again. Also test Stop with Browse Folder (standard scanner, no UAC).
