@@ -25,6 +25,10 @@ const { findRecycledEntry, readMetadata } = require('./recycle-restore');
 const { createLiveMonitor } = require('./live-updates');
 const { reconcilePaths } = require('./live-reconcile');
 const { migrateUserData } = require('./user-data-migration');
+const { ARCHIVE_EXTENSION, readScanArchive, saveScanArchive } = require('./scan-archive');
+const { parseSearchQuery } = require('./search-query');
+const { checkSourceIdentity, compareScans, filtersMatch, pageChanges } = require('./scan-compare');
+const { findDuplicates, isUserFilePath } = require('./duplicates');
 const requestRecycleConfirmation = createRecycleConfirmation(ipcMain);
 
 const APP_ICON = path.join(__dirname, '..', 'assets', 'diskoryx.ico');
@@ -34,9 +38,17 @@ let cachedScan = null;
 let cachedScanId = 0;
 const savedScans = new Map();
 const scanViewStates = new WeakMap();
+// Saved scan archives are read-only views of a historical result. They are never
+// stored as a live location snapshot, so they cannot answer a later Scan request
+// and cannot collide with a fresh scan of the same root.
+const ARCHIVE_READ_ONLY = 'This is a saved scan file: file actions, file previews and Explorer access are disabled. Rescan the original location to work with live files.';
+const ARCHIVE_PREVIEW = 'File previews read live files, so they are unavailable for a saved scan file. Rescan the original location to preview its contents.';
+function archiveReadOnly() {
+  return cachedScan?.readOnly ? { error: ARCHIVE_READ_ONLY, readOnly: true } : null;
+}
 const scanKey = folder => path.resolve(folder).toLowerCase();
 function retainCurrentScan() {
-  if (cachedScan) savedScans.set(scanKey(cachedScan.folderPath), cachedScan);
+  if (cachedScan && !cachedScan.readOnly) savedScans.set(scanKey(cachedScan.folderPath), cachedScan);
 }
 let folderSortCache = new WeakMap();
 let analysisCache = {};
@@ -44,6 +56,12 @@ let activeScanJob = null;
 let activeExports = 0;
 let copySelection = null;
 let activeCopy = null;
+// The native Copy helper stages items as .diskoryx-copy-<guid> inside the destination before publishing them.
+const COPY_STAGING_PREFIX = '.diskoryx-copy-';
+function isCopyStaging(target, root) {
+  const relative = path.relative(root, path.resolve(target));
+  return relative.split(path.sep).some(part => part.toLowerCase().startsWith(COPY_STAGING_PREFIX));
+}
 let liveOwner = null;
 let liveIndex = {};
 let liveStatus = { state: 'inactive', message: 'Scan a location to start live notifications.' };
@@ -64,7 +82,9 @@ const liveMonitor = createLiveMonitor({
     const scan = cachedScan;
     fileActionInProgress = true;
     try {
-      const changed = await reconcilePaths(scan, paths, liveIndex, cachedScanId, isCurrent);
+      // Actions and reconciliation are serialized. Reconcile their final events
+      // too: unchanged members are idempotent, but later external edits are not.
+      const changed = await reconcilePaths(scan, paths.filter(target => !isCopyStaging(target, scan.folderPath)), liveIndex, cachedScanId, isCurrent);
       if (changed && isCurrent() && cachedScan === scan) {
         cachedScanId++; folderSortCache = new WeakMap(); analysisCache = {};
         liveIndex.revision = cachedScanId;
@@ -333,7 +353,11 @@ async function createView(scan, scanId, sortType = 'name', extensionList = [], s
     scanDurationMs: scan.scanDurationMs,
     entriesPerSecond: scan.entriesPerSecond,
     scanMode: scan.scanMode,
-    scanModeReason: scan.scanModeReason
+    scanModeReason: scan.scanModeReason,
+    scanStartedAt: scan.scanStartedAt ?? null,
+    readOnly: scan.readOnly === true,
+    archive: scan.archive || null,
+    capacity: scan.capacity || null
   };
   result.liveStatus = liveStatus;
 
@@ -347,11 +371,23 @@ async function createView(scan, scanId, sortType = 'name', extensionList = [], s
 
 async function scanLocation(folderPath, event, folderFilters, job) {
   const signal = job.controller.signal;
+  const initialVolumeId = await volumeIdentity(folderPath);
   let scanMode = 'standard';
   let scanModeReason = 'Folder scans use filesystem traversal.';
   const reportProgress = (progress) => {
     if (activeScanJob === job && !signal.aborted && !event.sender.isDestroyed()) {
-      event.sender.send('scan-progress', { ...progress, requestId: job.requestId, scanMode, scanModeReason });
+      if (job.operation === 'duplicates') {
+        event.sender.send('duplicate-progress', {
+          stage: 'inventory',
+          filesScanned: progress.scannedEntries || 0,
+          scopePath: folderPath,
+          scanMode,
+          scanModeReason,
+          requestId: job.requestId
+        });
+      } else {
+        event.sender.send('scan-progress', { ...progress, requestId: job.requestId, scanMode, scanModeReason });
+      }
     }
   };
   let result = null;
@@ -382,15 +418,23 @@ async function scanLocation(folderPath, event, folderFilters, job) {
     result = await scanFolder(folderPath, reportProgress, folderFilters, signal);
   }
   signal.throwIfAborted();
-  return { ...result, scanMode, scanModeReason };
+  const finalVolumeId = result.success ? await volumeIdentity(folderPath) : null;
+  signal.throwIfAborted();
+  if (initialVolumeId !== null && finalVolumeId !== null && initialVolumeId !== finalVolumeId) {
+    throw new Error('The source volume changed during the scan. Scan the location again.');
+  }
+  return { ...result, scanMode, scanModeReason,
+    volumeId: initialVolumeId === finalVolumeId ? initialVolumeId : null };
 }
 
 async function getScanView(folderPath, event, activeScanFilters, sortType = 'name', extensions = [],
-  expectedScanId = null, force = false, requestId = null) {
+  expectedScanId = null, force = false, requestId = null, allowArchiveView = false) {
   if (activeScanJob) return { error: 'A scan is already running. Stop it or wait for it to finish.' };
   if (fileActionInProgress) return { error: 'Wait for the current file action to finish.' };
   const normalizedFilters = scanFolderRules(activeScanFilters);
-  if (!force && cachedScan
+  // Only a view change may reuse a saved scan archive. Scan/Rescan must always
+  // perform a real scan so a historical result is never presented as current.
+  if (!force && cachedScan && (allowArchiveView || !cachedScan.readOnly)
     && path.resolve(folderPath) === cachedScan.folderPath
     && JSON.stringify(scanFolderRules(cachedScan.scanFilters)) === JSON.stringify(normalizedFilters)) {
     if (expectedScanId !== null && expectedScanId !== cachedScanId) return { error: 'This scan has expired. Please scan the folder again.' };
@@ -406,6 +450,7 @@ async function getScanView(folderPath, event, activeScanFilters, sortType = 'nam
   try {
     const scan = await scanLocation(folderPath, event, normalizedFilters, job);
     if (!scan.success) return scan;
+    if (!scan.readOnly) scan.capacity = await captureVolumeCapacity(scan.folderPath);
     const nextScanId = cachedScanId + 1;
     const view = await createView(scan, nextScanId, sortType, extensions, activeScanFilters);
     job.controller.signal.throwIfAborted();
@@ -437,6 +482,80 @@ async function getScanView(folderPath, event, activeScanFilters, sortType = 'nam
   }
 }
 
+// Snapshot of the volume's capacity taken when a live scan completes. The
+// timestamp marks it as historical, so it is never shown as current disk state.
+async function captureVolumeCapacity(folderPath) {
+  try {
+    const volumePath = path.parse(folderPath).root;
+    const stats = await fs.statfs(volumePath, { bigint: true });
+    const totalBytes = stats.blocks * stats.bsize;
+    const availableBytes = stats.bavail * stats.bsize;
+    if (totalBytes > BigInt(Number.MAX_SAFE_INTEGER) || availableBytes > BigInt(Number.MAX_SAFE_INTEGER)) return null;
+    return {
+      totalBytes: Number(totalBytes),
+      availableBytes: Number(availableBytes),
+      capturedAt: Date.now(),
+      volumePath
+    };
+  } catch (error) {
+    console.warn('Unable to read volume capacity:', error.message);
+    return null;
+  }
+}
+
+let compareState = null;
+async function volumeIdentity(folderPath) {
+  try {
+    const stats = await fs.stat(folderPath);
+    return Number.isSafeInteger(stats.dev) ? stats.dev : null;
+  } catch {
+    return null;
+  }
+}
+
+ipcMain.handle('compare-with-current', async (event, requestId) => {
+  if (activeScanJob || fileActionInProgress || activeExports) {
+    return { error: 'Wait for the current scan, export or file action.' };
+  }
+  if (!cachedScan?.readOnly) return { error: 'Open a saved scan first, then compare it with the current state.' };
+  const before = cachedScan;
+  const root = before.folderPath;
+  const job = { controller: new AbortController(), sender: event.sender, requestId };
+  activeScanJob = job;
+  const abort = () => job.controller.abort();
+  event.sender.once('destroyed', abort);
+  try {
+    const after = await scanLocation(root, event, scanFolderRules(before.scanFilters), job);
+    if (!after.success) return { error: after.error || 'The current state could not be scanned.' };
+    if (!filtersMatch(before.scanFilters, after.scanFilters)) {
+      return { error: 'The saved scan used different filters. Compare is refused so the results stay accurate.' };
+    }
+    const identity = checkSourceIdentity(before.archive?.volumeId ?? null, after.volumeId);
+    if (!identity.ok) return { error: identity.error };
+    const diff = await compareScans(before, after, { signal: job.controller.signal });
+    job.controller.signal.throwIfAborted();
+    if (cachedScan !== before) return { error: 'The saved scan changed. Compare again.' };
+    compareState = { diff, beforeId: cachedScanId, verified: identity.verified, root };
+    return { success: true, verified: identity.verified, summary: { ...diff, lists: undefined } };
+  } catch (error) {
+    if (job.controller.signal.aborted) return { cancelled: true };
+    console.error('Compare failed:', error);
+    return { error: `Compare failed: ${error.message}` };
+  } finally {
+    event.sender.removeListener('destroyed', abort);
+    if (activeScanJob === job) activeScanJob = null;
+  }
+});
+
+ipcMain.handle('compare-page', (_event, kind, options) => {
+  if (!compareState || compareState.beforeId !== cachedScanId) return { error: 'Run Compare again.' };
+  try {
+    return { success: true, ...pageChanges(compareState.diff, kind, options) };
+  } catch (error) {
+    return { error: error.message };
+  }
+});
+
 ipcMain.handle('cancel-scan', (event, requestId) => {
   if (!activeScanJob || activeScanJob.sender !== event.sender || activeScanJob.requestId !== requestId) {
     return { error: 'This scan is no longer running.' };
@@ -450,13 +569,22 @@ ipcMain.handle('scan-folder', async (event, folderPath, scanFilters, requestId) 
   return getScanView(folderPath, event, activeScanFilters, 'name', [], null, false, requestId);
 });
 
-ipcMain.handle('list-saved-scans', () => ({
-  success: true,
-  scans: [...savedScans.values(), ...(cachedScan ? [cachedScan] : [])].map(scan => ({
-    folderPath: scan.folderPath, fileCount: scan.fileCount,
-    totalSizeFormatted: scan.totalSizeFormatted, active: scan === cachedScan
-  }))
-}));
+ipcMain.handle('list-saved-scans', () => {
+  const active = cachedScan;
+  const activeKey = active ? scanKey(active.folderPath) : null;
+  // While a saved scan file is active, a live snapshot of the same root would
+  // resolve to the same switch key; list only the result being shown.
+  const scans = [...savedScans.values(), ...(active ? [active] : [])].filter(scan =>
+    !active?.readOnly || scan === active || scanKey(scan.folderPath) !== activeKey);
+  return {
+    success: true,
+    scans: scans.map(scan => ({
+      folderPath: scan.folderPath, fileCount: scan.fileCount,
+      totalSizeFormatted: scan.totalSizeFormatted, active: scan === cachedScan,
+      readOnly: scan.readOnly === true, savedAt: scan.archive?.savedAt || null
+    }))
+  };
+});
 
 ipcMain.handle('activate-saved-scan', async (event, folderPath) => {
   if (activeScanJob || fileActionInProgress || activeExports) {
@@ -499,7 +627,116 @@ ipcMain.handle('activate-saved-scan', async (event, folderPath) => {
   }
 });
 
-ipcMain.handle('list-drives', async () => {
+ipcMain.handle('save-scan-archive', async (event, scanId) => {
+  if (fileActionInProgress || activeScanJob || activeExports) {
+    return { error: 'Wait for the current scan, export or file action.' };
+  }
+  if (!cachedScan || scanId !== cachedScanId) return { error: 'This scan has expired. Please scan the folder again.' };
+  const scan = cachedScan;
+  const rootName = path.basename(scan.folderPath)
+    || scan.folderPath.replace(/[\\/:]/g, '').toLowerCase()
+    || 'scan';
+  const saveOptions = {
+    title: 'Save this scan to a file',
+    defaultPath: path.join(app.getPath('downloads'), `${rootName}-diskoryx-scan${ARCHIVE_EXTENSION}`),
+    filters: [{ name: 'Diskoryx saved scan', extensions: [ARCHIVE_EXTENSION.slice(1)] }]
+  };
+  const parentWindow = BrowserWindow.fromWebContents(event.sender);
+  const saveResult = parentWindow
+    ? await dialog.showSaveDialog(parentWindow, saveOptions)
+    : await dialog.showSaveDialog(saveOptions);
+  if (saveResult.canceled || !saveResult.filePath) return { success: false, cancelled: true };
+  if (cachedScan !== scan || scanId !== cachedScanId) return { error: 'This scan changed while saving. Try again.' };
+  if (fileActionInProgress || activeScanJob) return { error: 'Wait for the current scan, export or file action.' };
+
+  // Counts as an export so live reconciliation and file actions wait, but the
+  // active scan stays usable for navigation.
+  activeExports++;
+  try {
+    const saved = await saveScanArchive(scan, saveResult.filePath, {
+      appVersion: typeof app.getVersion === 'function' ? app.getVersion() : '',
+      volumeId: scan.readOnly ? scan.archive?.volumeId : scan.volumeId
+    });
+    return { success: true, ...saved };
+  } catch (error) {
+    console.warn('Saved scan could not be written:', error.message);
+    return { error: `Unable to save the scan file: ${error.message}` };
+  } finally {
+    activeExports--;
+  }
+});
+
+ipcMain.handle('open-scan-archive', async (event, requestId) => {
+  if (activeScanJob || fileActionInProgress || activeExports) {
+    return { error: 'Wait for the current scan, export or file action.' };
+  }
+  const openOptions = {
+    title: 'Open a saved scan',
+    defaultPath: app.getPath('downloads'),
+    properties: ['openFile'],
+    filters: [
+      { name: 'Diskoryx saved scan', extensions: [ARCHIVE_EXTENSION.slice(1)] },
+      { name: 'All files', extensions: ['*'] }
+    ]
+  };
+  const parentWindow = BrowserWindow.fromWebContents(event.sender);
+  const picked = parentWindow
+    ? await dialog.showOpenDialog(parentWindow, openOptions)
+    : await dialog.showOpenDialog(openOptions);
+  if (picked.canceled || !picked.filePaths?.length) return { success: false, cancelled: true };
+
+  const job = { controller: new AbortController(), sender: event.sender, requestId };
+  const abort = () => job.controller.abort();
+  activeScanJob = job;
+  event.sender.once('destroyed', abort);
+  try {
+    // The archive is untrusted input: reading it never touches the filesystem
+    // beyond this one file and never starts a scan.
+    const archive = await readScanArchive(picked.filePaths[0], {
+      signal: job.controller.signal,
+      onProgress: progress => {
+        if (activeScanJob === job && !job.controller.signal.aborted && !event.sender.isDestroyed()) {
+          event.sender.send('scan-progress', {
+            requestId: job.requestId, phase: 'archive',
+            scannedEntries: progress.processed, fileCount: progress.files, folderCount: progress.folders,
+            skippedCount: 0, filteredCount: 0, excludedFolderCount: 0,
+            elapsedMs: progress.elapsedMs, entriesPerSecond: 0
+          });
+        }
+      }
+    });
+    job.controller.signal.throwIfAborted();
+    const nextScanId = cachedScanId + 1;
+    const view = await createView(archive, nextScanId, 'name', [], archive.scanFilters);
+    if (!view.success) return view;
+    job.controller.signal.throwIfAborted();
+    if (event.sender.isDestroyed()) return { error: 'The requesting window was closed.' };
+
+    liveMonitor.stop();
+    retainCurrentScan();
+    cachedScan = archive;
+    cachedScanId = nextScanId;
+    folderSortCache = new WeakMap();
+    analysisCache = {};
+    liveIndex = {};
+    liveOwner = event.sender;
+    liveStatus = {
+      state: 'archive',
+      message: `Saved scan from ${new Date(archive.archive.savedAt).toLocaleString()}. This result is read-only and not monitored; Rescan the original location to work with live files.`
+    };
+    view.liveStatus = liveStatus;
+    return view;
+  } catch (error) {
+    if (job.controller.signal.aborted) return { cancelled: true };
+    console.warn('Saved scan could not be opened:', error.message);
+    return { error: `Unable to open the saved scan: ${error.message}` };
+  } finally {
+    event.sender.removeListener('destroyed', abort);
+    if (activeScanJob === job) activeScanJob = null;
+  }
+});
+
+async function listLocalDrives() {
   const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   const drives = await Promise.all([...letters].map(async (letter) => {
     const drivePath = `${letter}:\\`;
@@ -510,11 +747,16 @@ ipcMain.handle('list-drives', async () => {
     return null;
   }));
 
-  return { drives: drives.filter(Boolean) };
-});
+  return drives.filter(Boolean);
+}
+
+ipcMain.handle('list-drives', async () => ({ drives: await listLocalDrives() }));
 
 ipcMain.handle('volume-capacity', async (_event, scanId) => {
   if (!cachedScan || cachedScanId !== scanId) return { error: 'This scan has expired. Please scan the location again.' };
+  if (cachedScan.readOnly) {
+    return { error: 'Free space is only reported for a live scan. Rescan the original location to read current capacity.' };
+  }
   const scan = cachedScan;
   try {
     const volumePath = path.parse(scan.folderPath).root;
@@ -584,20 +826,21 @@ ipcMain.handle('get-folder-ancestors', (_event, scanId, folderId, extensions, sc
 
 ipcMain.handle('sort-tree', async (event, folderPath, sortType, scanId, extensions, scanFilters) => {
   const activeScanFilters = normalizeScanFilters(scanFilters);
-  return getScanView(folderPath, event, activeScanFilters, sortType, extensions, scanId);
+  return getScanView(folderPath, event, activeScanFilters, sortType, extensions, scanId, false, null, true);
 });
 
 ipcMain.handle('filter-by-extension', async (event, folderPath, extensions, scanId, sortType, scanFilters) => {
   const activeScanFilters = normalizeScanFilters(scanFilters);
-  return getScanView(folderPath, event, activeScanFilters, sortType, extensions, scanId);
+  return getScanView(folderPath, event, activeScanFilters, sortType, extensions, scanId, false, null, true);
 });
 
 ipcMain.handle('search-files', async (_event, scanId, query, extensionList, offset = 0, limit = PAGE_SIZE, scanFilters) => {
   if (!cachedScan || scanId !== cachedScanId) return { error: 'This scan has expired. Please scan the folder again.' };
-  const searchText = String(query || '').trim().toLowerCase();
+  const parsed = parseSearchQuery(query);
+  if (parsed.error) return { error: parsed.error };
   const extensions = normalizeExtensions(extensionList);
   const activeScanFilters = normalizeScanFilters(scanFilters);
-  if (!searchText) return { success: true, results: [], totalCount: 0, offset: 0 };
+  if (parsed.empty) return { success: true, results: [], totalCount: 0, offset: 0 };
 
   const safeOffset = Math.max(0, Number.isFinite(offset) ? Math.floor(offset) : 0);
   const safeLimit = Math.min(PAGE_SIZE, Math.max(1, Number.isFinite(limit) ? Math.floor(limit) : PAGE_SIZE));
@@ -606,7 +849,7 @@ ipcMain.handle('search-files', async (_event, scanId, query, extensionList, offs
   const scan = cachedScan;
   for (let index = 0; index < scan.fileNodes.length; index++) {
     const file = scan.fileNodes[index];
-    if (file.name.toLowerCase().includes(searchText)
+    if (parsed.matches(file)
       && extensionIsVisible(file.extension, extensions, activeScanFilters)) {
       if (totalCount >= safeOffset && results.length < safeLimit) results.push(projectItem(file, []));
       totalCount++;
@@ -628,6 +871,63 @@ ipcMain.handle('analysis-page', async (_event, scanId, options) => {
   } catch (error) {
     console.warn('Analysis request failed:', error.message);
     return { error: error.message };
+  }
+});
+
+ipcMain.handle('find-duplicates', async (event, drivePath, requestId, scope = 'user') => {
+  if (activeScanJob || fileActionInProgress || activeExports) {
+    return { error: 'Wait for the current scan, export or file action.' };
+  }
+  if (typeof drivePath !== 'string' || !Number.isSafeInteger(requestId)) {
+    return { error: 'Select an available drive before finding duplicates.' };
+  }
+  if (scope !== 'user' && scope !== 'all') return { error: 'Choose a valid duplicate analysis scope.' };
+  const job = { controller: new AbortController(), sender: event.sender, requestId, operation: 'duplicates' };
+  const abort = () => job.controller.abort();
+  activeScanJob = job;
+  event.sender.once('destroyed', abort);
+  try {
+    const selectedDrive = (await listLocalDrives())
+      .find(drive => drive.path.toLowerCase() === drivePath.toLowerCase());
+    if (!selectedDrive) return { error: 'The selected drive is not available.' };
+    const volumeRoot = selectedDrive.path;
+    const existingInventory = [cachedScan, savedScans.get(scanKey(volumeRoot))].find(scan =>
+      scan?.success && !scan.readOnly && scanKey(scan.folderPath) === scanKey(volumeRoot)
+      && scanFolderRules(scan.scanFilters).excludeFolderNames.length === 0);
+    const inventory = existingInventory
+      || await scanLocation(volumeRoot, event, normalizeScanFilters({}), job);
+    job.controller.signal.throwIfAborted();
+    if (!inventory.success) {
+      return { error: `Unable to enumerate ${volumeRoot} for duplicate analysis: ${inventory.error || 'scan failed'}` };
+    }
+    const candidateFiles = scope === 'user'
+      ? inventory.fileNodes.filter(file => isUserFilePath(volumeRoot, file.path))
+      : inventory.fileNodes;
+    const excludedFileCount = inventory.fileNodes.length - candidateFiles.length;
+    const result = await findDuplicates(volumeRoot, {
+      signal: job.controller.signal,
+      candidateFiles,
+      onProgress(progress) {
+        if (activeScanJob === job && !job.controller.signal.aborted && !event.sender.isDestroyed()) {
+          event.sender.send('duplicate-progress', {
+            ...progress,
+            scopePath: volumeRoot,
+            scanMode: inventory.scanMode,
+            requestId
+          });
+        }
+      }
+    });
+    job.controller.signal.throwIfAborted();
+    return { ...result, scopePath: volumeRoot, scope, excludedFileCount,
+      scanMode: inventory.scanMode, inventoryReused: Boolean(existingInventory) };
+  } catch (error) {
+    if (job.controller.signal.aborted || error.name === 'AbortError') return { cancelled: true };
+    console.error('Duplicate analysis failed:', error);
+    return { error: `Duplicate analysis failed: ${error.message}` };
+  } finally {
+    event.sender.removeListener('destroyed', abort);
+    if (activeScanJob === job) activeScanJob = null;
   }
 });
 
@@ -693,6 +993,7 @@ function resolveScannedFile(filePath) {
 
 ipcMain.handle('read-text-preview', async (_event, scanId, filePath, page, revision) => {
   if (!cachedScan || scanId !== cachedScanId) return { error: 'This scan has expired. Scan the folder again before previewing files.' };
+  if (cachedScan.readOnly) return { error: ARCHIVE_PREVIEW, readOnly: true };
   const scan = cachedScan;
   const target = resolveScannedFile(filePath);
   if (target.error) return target;
@@ -740,6 +1041,8 @@ ipcMain.handle('open-support-page', async () => {
 });
 
 ipcMain.handle('copy-path', async (_event, filePath) => {
+  const readOnly = archiveReadOnly();
+  if (readOnly) return readOnly;
   const target = resolveScannedFile(filePath);
   if (target.error) return target;
   const entryCheck = await validateScannedEntry(target.path);
@@ -750,6 +1053,8 @@ ipcMain.handle('copy-path', async (_event, filePath) => {
 });
 
 ipcMain.handle('reveal-in-explorer', async (_event, filePath) => {
+  const readOnly = archiveReadOnly();
+  if (readOnly) return readOnly;
   const target = resolveScannedFile(filePath);
   if (target.error) return target;
   const entryCheck = await validateScannedEntry(target.path);
@@ -773,6 +1078,8 @@ let fileActionInProgress = false;
 async function modifyScannedItem(event, scanId, filePath, newName, recycle, historyEntry = null) {
   if (fileActionInProgress || activeScanJob || activeExports) return { error: 'Wait for the current scan, CSV export or file action to finish.' };
   if (!cachedScan || scanId !== cachedScanId) return { error: 'This scan has expired. Scan again before modifying files.' };
+  const readOnly = archiveReadOnly();
+  if (readOnly) return readOnly;
   const scan = cachedScan;
   const target = resolveScannedFile(filePath);
   if (target.error) return target;
@@ -869,6 +1176,8 @@ ipcMain.handle('create-folder', async (event, scanId, folderId, name) => {
   if (fileActionInProgress || activeScanJob || activeExports || !cachedScan || cachedScanId !== scanId) {
     return { error: 'Wait for the current scan, export or file action and choose a folder from the current scan.' };
   }
+  const readOnly = archiveReadOnly();
+  if (readOnly) return readOnly;
   fileActionInProgress = true;
   const scan = cachedScan;
   try {
@@ -974,6 +1283,8 @@ ipcMain.handle('copy-item', async (event, filePath, scanId, mode = 'copy') => {
   if (fileActionInProgress || activeScanJob || !cachedScan || cachedScanId !== scanId) {
     return { error: 'Wait for file actions/scanning and select an item from the current scan.' };
   }
+  const readOnly = archiveReadOnly();
+  if (readOnly) return readOnly;
   try {
     if (!['copy', 'move'].includes(mode)) throw new Error('Unsupported transfer selection.');
     const scan = cachedScan;
@@ -1112,6 +1423,8 @@ async function pasteSelection(event, selection, destination, previous = null) {
 
 ipcMain.handle('paste-item', async (event, scanId, folderId) => {
   if (fileActionInProgress || activeScanJob || activeExports) return { error: 'Wait for the current scan, export or file action.' };
+  const readOnly = archiveReadOnly();
+  if (readOnly) return readOnly;
   if (!copySelection || copySelection.sender !== event.sender) return { error: 'Use Copy on a scanned file or folder first.' };
   if (!cachedScan || cachedScanId !== scanId) return { error: 'The destination scan changed. Open its folder again before pasting.' };
   if (!Number.isInteger(folderId) || folderId < 0 || !cachedScan.folderNodes[folderId]) {
@@ -1120,8 +1433,9 @@ ipcMain.handle('paste-item', async (event, scanId, folderId) => {
   const destination = cachedScan.folderNodes[folderId].path || cachedScan.folderPath;
   fileActionInProgress = true;
   try {
-    const result = await pasteSelection(event, copySelection, destination);
-    if (result.success && result.moved) copySelection = null;
+    const selection = copySelection;
+    const result = await pasteSelection(event, selection, destination);
+    if (result.success && copySelection === selection) copySelection = null;
     return result;
   } catch (error) {
     if (error.outcomeUncertain) {
@@ -1135,6 +1449,8 @@ ipcMain.handle('paste-item', async (event, scanId, folderId) => {
 
 ipcMain.handle('move-history-action', async (event, id) => {
   if (fileActionInProgress || activeScanJob || activeExports) return { error: 'Wait for the current operation.' };
+  const readOnly = archiveReadOnly();
+  if (readOnly) return readOnly;
   fileActionInProgress = true;
   try {
     await actionHistory.load();
@@ -1179,6 +1495,8 @@ ipcMain.handle('clear-copy-selection', event => {
 
 ipcMain.handle('copy-history-action', async (event, id) => {
   if (fileActionInProgress || activeScanJob || activeExports) return { error: 'Wait for the current scan, export or file action.' };
+  const readOnly = archiveReadOnly();
+  if (readOnly) return readOnly;
   fileActionInProgress = true;
   try {
     await actionHistory.load();
@@ -1228,6 +1546,8 @@ ipcMain.handle('copy-history-action', async (event, id) => {
 
 ipcMain.handle('restore-recycled-item', async (event, id) => {
   if (fileActionInProgress || activeScanJob || activeExports) return { error: 'Wait for the current scan, export or file action.' };
+  const readOnly = archiveReadOnly();
+  if (readOnly) return readOnly;
   fileActionInProgress = true;
   try {
     await actionHistory.load();

@@ -5,3 +5,6 @@ native/file-actions/bin/
 native/scan-broker/bin/
 Installation files/.build/
 Installation files/*.exe
+
+# Local pre-change backups
+.task-backups/

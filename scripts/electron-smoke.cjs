@@ -10,6 +10,11 @@ electron.app.disableHardwareAcceleration();
 const temporaryRoot = process.env.DISKORYX_SMOKE_ROOT;
 const realRecycle = process.env.DISKORYX_SMOKE_REAL_RECYCLE === '1';
 const multiDrive = process.env.DISKORYX_SMOKE_MULTI_DRIVE === '1';
+// Saved-scan checks reuse the native save/open dialogs with owned fixture paths.
+const archiveSaveTarget = process.env.DISKORYX_SMOKE_ARCHIVE_SAVE || null;
+const archiveOpenTarget = process.env.DISKORYX_SMOKE_ARCHIVE_OPEN || null;
+const archiveReopenOnly = process.env.DISKORYX_SMOKE_ARCHIVE_OPEN_ONLY === '1';
+const duplicateUI = process.env.DISKORYX_SMOKE_DUPLICATES === '1';
 if (!temporaryRoot) throw new Error('Run with npm run test:smoke, not directly.');
 const instanceProfile = path.join(temporaryRoot, 'profile');
 fsSync.mkdirSync(instanceProfile, { recursive: true });
@@ -19,6 +24,7 @@ const mainRoot = path.join(__dirname, '..', 'src', 'main');
 const mainRequire = createRequire(path.join(mainRoot, 'main.js'));
 let window;
 let scans = 0;
+let volumeInventoryScans = 0;
 let recycleCount = 0;
 let initialCopyRecord;
 const rendererErrors = [];
@@ -56,9 +62,9 @@ const isolatedApp = new Proxy(electron.app, {
 });
 
 async function run() {
-  await fs.mkdir(path.join(temporaryRoot, 'settings'));
-  await fs.mkdir(path.join(temporaryRoot, 'scan'));
-  await fs.mkdir(path.join(temporaryRoot, 'scan', 'copy-destination'));
+  await fs.mkdir(path.join(temporaryRoot, 'settings'), { recursive: true });
+  await fs.mkdir(path.join(temporaryRoot, 'scan'), { recursive: true });
+  await fs.mkdir(path.join(temporaryRoot, 'scan', 'copy-destination'), { recursive: true });
   await fs.writeFile(path.join(temporaryRoot, 'scan', 'example.log'), 'log line\n'.repeat(10000));
   await fs.writeFile(path.join(temporaryRoot, 'scan', 'settings.json'), '{"enabled":true}');
   if (multiDrive) {
@@ -73,7 +79,7 @@ async function run() {
     callback({ cancel: /^https?:/i.test(details.url) });
   });
   vm.runInNewContext(fsSync.readFileSync(path.join(mainRoot, 'main.js'), 'utf8'), {
-    __dirname: mainRoot, process, console, setImmediate, AbortController,
+    __dirname: mainRoot, process, console, setImmediate, setTimeout, clearTimeout, AbortController,
     require(name) {
       if (name === 'electron') return {
         ...electron, app: isolatedApp, BrowserWindow: HiddenWindow,
@@ -87,7 +93,13 @@ async function run() {
         }),
         dialog: {
           ...electron.dialog,
-          showOpenDialog: async () => { throw new Error('Copy/Paste must stay inside Diskoryx'); }
+          showSaveDialog: async (maybeWindow, maybeOptions) => archiveSaveTarget
+            ? { canceled: false, filePath: archiveSaveTarget }
+            : electron.dialog.showSaveDialog(maybeWindow, maybeOptions),
+          showOpenDialog: async () => {
+            if (archiveOpenTarget) return { canceled: false, filePaths: [archiveOpenTarget] };
+            throw new Error('Copy/Paste must stay inside Diskoryx');
+          }
         },
         shell: {
           ...electron.shell,
@@ -103,7 +115,23 @@ async function run() {
       };
       if (name === './scanner') return {
         ...mainRequire(name),
-        scanFolder(...args) { scans++; return mainRequire(name).scanFolder(...args); }
+        scanFolder(folderPath, ...args) {
+          if (duplicateUI && /^[a-z]:\\$/i.test(folderPath)) {
+            volumeInventoryScans++;
+            return mainRequire(name).scanFolder(path.join(temporaryRoot, 'scan'), ...args);
+          }
+          scans++;
+          return mainRequire(name).scanFolder(folderPath, ...args);
+        }
+      };
+      if (name === './mft-scanner' && duplicateUI) return {
+        ...mainRequire(name),
+        getMftScannerPath: () => null
+      };
+      if (name === './duplicates' && duplicateUI) return {
+        ...mainRequire(name),
+        findDuplicates: (_volumeRoot, options) =>
+          mainRequire(name).findDuplicates(path.join(temporaryRoot, 'scan'), options)
       };
       if (name === './live-updates' && process.env.DISKORYX_SMOKE_LIVE !== '1') return {
         createLiveMonitor: () => ({ start: () => true, stop() {} })
@@ -117,6 +145,7 @@ async function run() {
   });
   await loaded;
   const js = source => window.webContents.executeJavaScript(source);
+  if (archiveReopenOnly) return runArchiveReopen(js);
   if (process.env.DISKORYX_SMOKE_STARTUP_ERROR === '1') {
     assert.equal(await js('document.getElementById("startup-message").textContent'),
       'Start Diskoryx normally, not as administrator. <literal test>');
@@ -177,11 +206,65 @@ async function run() {
   const folderPath = path.join(temporaryRoot, 'scan');
   await js(`runScan(id => window.electronAPI.scanFolder(${JSON.stringify(folderPath)}, currentScanFilters, id))`);
   await waitFor('currentResult?.fileCount === 2 && !scanInProgress');
-  await waitFor('!document.getElementById("disk-capacity-card").hidden && document.getElementById("capacity-free").textContent !== "Checking..."');
-  assert.notEqual(await js('document.getElementById("capacity-free").textContent'), 'Unavailable');
-  assert.match(await js('document.getElementById("capacity-total").textContent'), /free of .* total/);
-  assert.equal(await js('document.getElementById("capacity-volume").textContent'), path.parse(folderPath).root.replace(/[\\/]+$/, ''));
+  await waitFor('!document.getElementById("volume-capacity").hidden && !document.getElementById("volume-capacity").textContent.includes("Checking")');
+  assert.doesNotMatch(await js('document.getElementById("volume-capacity").textContent'), /Unavailable/);
+  assert.match(await js('document.getElementById("volume-capacity").textContent'), /Whole volume/);
+  assert.doesNotMatch(await js('document.getElementById("volume-capacity").textContent'), /Volume/);
+  assert.equal(await js('document.getElementById("location-label").textContent'), folderPath);
   const duration = await js('currentResult.scanDurationMs');
+  if (duplicateUI) {
+    const firstDuplicate = path.join(folderPath, 'duplicate-smoke-one.txt');
+    const secondDuplicate = path.join(folderPath, 'duplicate-smoke-two.txt');
+    await fs.writeFile(firstDuplicate, 'same duplicate smoke content');
+    await fs.writeFile(secondDuplicate, 'same duplicate smoke content');
+    await js('document.querySelector(\'[data-view="duplicates"]\').click()');
+    const driveRoot = path.parse(folderPath).root;
+    await waitFor(`Array.from(document.getElementById("duplicates-drive-select").options).some(option => option.value === ${JSON.stringify(driveRoot)})`);
+    await js(`(() => { const select = document.getElementById("duplicates-drive-select"); select.value = ${JSON.stringify(driveRoot)}; select.dispatchEvent(new Event("change")); })()`);
+    assert.equal(await js('document.getElementById("duplicates-scope-select").value'), 'user');
+    // Disposable smoke files live in AppData, which User files deliberately excludes.
+    await js('document.getElementById("duplicates-scope-select").value = "all"; document.getElementById("duplicates-scope-select").dispatchEvent(new Event("change"))');
+    await js('document.getElementById("find-duplicates-btn").click()');
+    await waitFor('!scanInProgress && !document.getElementById("duplicates-results").hidden && document.getElementById("duplicates-groups").textContent === "1"');
+    assert.equal(await js('document.querySelectorAll("#duplicates-chart .duplicate-bar").length'), 1);
+    assert.equal(await js('document.querySelectorAll("#duplicates-rows details[open]").length'), 0);
+    await js('document.querySelector("#duplicates-chart button").click()');
+    assert.equal(await js('document.querySelectorAll("#duplicates-rows details[open]").length'), 1);
+    assert.match(await js('document.getElementById("duplicates-rows").textContent'), /duplicate-smoke-one\.txt/);
+    assert.match(await js('document.getElementById("duplicates-rows").textContent'), /duplicate-smoke-two\.txt/);
+    assert.match(await js('document.getElementById("duplicates-status").textContent'), /[A-Z]:\\/i);
+    assert.match(await js('document.getElementById("duplicates-status").title'), /not an estimate of physical disk space freed/);
+    await js('document.getElementById("duplicates-query").value = "no-match-smoke"; document.getElementById("duplicates-query").dispatchEvent(new Event("input"))');
+    assert.equal(await js('document.getElementById("duplicates-rows").children.length'), 0);
+    await js('document.getElementById("duplicates-query").value = ""; document.getElementById("duplicates-query").dispatchEvent(new Event("input"))');
+    assert.equal(await js('document.getElementById("duplicates-rows").children.length'), 1);
+    const duplicateCaptureDir = process.env.DISKORYX_SMOKE_DUPLICATES_CAPTURE_DIR;
+    if (duplicateCaptureDir) {
+      await fs.mkdir(duplicateCaptureDir, { recursive: true });
+      await window.webContents.capturePage();
+      await new Promise(resolve => setTimeout(resolve, 250));
+      await fs.writeFile(path.join(duplicateCaptureDir, 'duplicates-dark.png'),
+        (await window.webContents.capturePage()).toPNG());
+    }
+    assert.equal(volumeInventoryScans, 1, 'a subfolder scan must be expanded to a full-drive inventory');
+    const darkDuplicates = await js('getComputedStyle(document.getElementById("duplicates-panel")).backgroundColor');
+    await js('document.getElementById("theme-toggle").click()');
+    const lightDuplicates = await js('getComputedStyle(document.getElementById("duplicates-panel")).backgroundColor');
+    assert.notEqual(darkDuplicates, lightDuplicates);
+    assert.equal(await js(`getComputedStyle(document.querySelector("#duplicates-panel > .section-header")).backgroundColor
+      === getComputedStyle(document.querySelector(".duplicates-metrics > div")).backgroundColor`), true);
+    if (duplicateCaptureDir) {
+      await window.webContents.capturePage();
+      await new Promise(resolve => setTimeout(resolve, 250));
+      await fs.writeFile(path.join(duplicateCaptureDir, 'duplicates-light.png'),
+        (await window.webContents.capturePage()).toPNG());
+    }
+    await js('document.getElementById("theme-toggle").click()');
+    await js('document.querySelector(\'[data-view="explorer"]\').click()');
+    await fs.rm(firstDuplicate, { force: true });
+    await fs.rm(secondDuplicate, { force: true });
+    console.log('PASS: live Duplicate Finder scans user-selected files, renders safe results, and follows both themes.');
+  }
   await contextAction('settings.json', 'rename');
   await js(`renameInput.value = 'renamed.txt'; renameForm.requestSubmit();`);
   await waitFor('!fileActionInProgress && virtualTree.selectedPath?.endsWith("renamed.txt")');
@@ -234,8 +317,10 @@ async function run() {
   await waitFor('document.getElementById("action-toast").textContent.includes("selected.")');
   await contextAction('copy-destination', 'paste');
   await waitFor('!fileActionInProgress && !document.getElementById("copy-dialog").open');
-  assert.equal(await js('messageDialog.open'), false,
-    await js('document.getElementById("message-text").textContent'));
+  await waitFor('document.getElementById("message-title").textContent === "Copied successfully" && messageDialog.open');
+  assert.equal(await js('document.getElementById("message-text").textContent'), 'Item copied');
+  await js('document.getElementById("message-close").click()');
+  assert.equal(await js('messageDialog.open'), false);
   assert.equal(await fs.readFile(path.join(folderPath, 'copy-destination', 'renamed.txt'), 'utf8'), '{"enabled":true}');
   assert.equal(await fs.readFile(path.join(folderPath, 'renamed.txt'), 'utf8'), '{"enabled":true}');
   await js('document.getElementById("history-btn").click()');
@@ -432,11 +517,88 @@ async function run() {
       console.log('PASS: actual C: MFT snapshot remains browsable with drive-wide live notifications enabled.');
     }
   }
+  if (archiveSaveTarget) {
+    const liveFiles = await js('currentResult.fileCount');
+    const liveFolders = await js('currentResult.folderCount');
+    const liveBytes = await js('currentResult.totalSizeBytes');
+    await js('document.getElementById("save-scan-btn").click()');
+    await waitFor('document.getElementById("save-archive-dialog").open');
+    assert.match(await js('document.getElementById("save-archive-note").textContent'), /full paths/);
+    assert.match(await js('document.getElementById("save-archive-note").textContent'), /does not send it anywhere/);
+    assert.equal(await js('document.activeElement.id'), 'save-archive-cancel');
+    assert.notEqual(await js('getComputedStyle(document.getElementById("save-archive-dialog")).backgroundColor'), 'rgba(0, 0, 0, 0)');
+    await js('document.getElementById("save-archive-confirm").click()');
+    await waitFor('!fileActionInProgress && document.getElementById("message-dialog").open && document.getElementById("message-title").textContent === "Scan saved"');
+    assert.match(await js('document.getElementById("message-text").textContent'), /not uploaded/);
+    await js('document.getElementById("message-close").click()');
+    assert.equal(fsSync.existsSync(archiveSaveTarget), true, 'the saved scan file must exist');
+    assert.equal(await js('currentResult.readOnly'), false);
+    assert.equal(await js('document.getElementById("archive-badge").hidden'), true);
+    console.log('ARCHIVE SUMS', JSON.stringify({ files: liveFiles, folders: liveFolders, bytes: liveBytes }));
+  }
+  if (archiveSaveTarget && archiveOpenTarget) {
+    const liveFiles = await js('currentResult.fileCount');
+    const liveBytes = await js('currentResult.totalSizeBytes');
+    assert.equal(await js('document.getElementById("open-scan-btn").disabled'), false);
+    await js('document.getElementById("open-scan-btn").click()');
+    await waitFor('!scanInProgress && currentResult?.readOnly === true');
+    assert.equal(await js('currentResult.fileCount'), liveFiles);
+    assert.equal(await js('currentResult.totalSizeBytes'), liveBytes);
+    assert.equal(await js('document.getElementById("archive-badge").hidden'), false);
+    assert.match(await js('document.getElementById("archive-badge").textContent'), /read-only/);
+    assert.equal(await js('document.getElementById("scan-mode").textContent'), 'Saved · Read-only');
+    assert.equal(await js('document.getElementById("scan-mode").hidden'), false);
+    assert.equal(await js('document.getElementById("export-csv-btn").disabled'), false);
+    assert.ok(await js('document.querySelectorAll(".virtual-tree-row").length') > 0);
+    // Saved scans show the capacity recorded at scan time, never the live value.
+    assert.match(await js('document.getElementById("volume-capacity").textContent'), /Recorded/);
+    assert.doesNotMatch(await js('document.getElementById("volume-capacity").textContent'), /Whole volume/);
+    await js(`showFileContextMenu(virtualTree.root.children.find(item => item.type === 'file'), { preventDefault() {}, clientX: 20, clientY: 20 })`);
+    await waitFor('document.getElementById("message-dialog").open');
+    assert.equal(await js('document.getElementById("message-title").textContent'), 'Saved scan: read-only');
+    assert.match(await js('document.getElementById("message-text").textContent'), /are disabled/);
+    await js('document.getElementById("message-close").click()');
+    const blockedPreview = await js(`window.electronAPI.readTextPreview(currentScanId, currentResult.folderPath + '\\example.log', 0, null)`);
+    assert.match(blockedPreview.error, /saved scan/i);
+    assert.equal(await js('document.getElementById("saved-scans-select").selectedOptions[0].textContent.includes("saved scan")'), true);
+    assert.equal(scans, 1, 'opening a saved scan must never start a scan');
+    await js(`document.querySelector('[data-view="largest"]').click()`);
+    await waitFor('!document.getElementById("analysis-panel").hidden && document.querySelectorAll("#analysis-rows tr").length > 0');
+    await js(`document.querySelector('[data-view="explorer"]').click()`);
+    await js(`runScan(id => window.electronAPI.refreshTree(${JSON.stringify(folderPath)}, currentScanFilters, id))`);
+    await waitFor('!scanInProgress && currentResult?.readOnly === false');
+    assert.equal(await js('document.getElementById("archive-badge").hidden'), true);
+    assert.equal(scans, 2, 'Rescan must perform a real scan');
+    console.log('PASS: saved scan saved, reopened read-only with blocked actions and analysis, then rescanned for a live result.');
+    if (process.env.DISKORYX_SMOKE_COMPARE === '1') {
+      // Compare needs the saved scan open again: the rescan above replaced it with a live result.
+      await js('document.getElementById("open-scan-btn").click()');
+      await waitFor('!scanInProgress && currentResult?.readOnly === true');
+      await fs.writeFile(path.join(folderPath, 'compare-added.txt'), 'added after save');
+      const compareStarted = await js('performance.now()');
+      await js('document.getElementById("compare-scan-btn").click()');
+      await waitFor('document.getElementById("compare-view").hidden === false && document.getElementById("compare-counts").textContent.includes("Added: 1")');
+      const compareMs = await js(`performance.now() - ${compareStarted}`);
+      console.log('PERF compare click-to-view ms', Math.round(compareMs));
+      assert.match(await js('document.getElementById("compare-counts").textContent'), /Added: 1/);
+      assert.match(await js('document.getElementById("compare-counts").textContent'), /Removed: 0/);
+      assert.equal(await js('currentResult.readOnly'), true, 'Compare must leave the saved scan read-only');
+      assert.equal(scans, 3, 'Compare performs one real current-state scan');
+      console.log('PERF compare scans-after-click', scans);
+      const ordinaryStarted = await js('performance.now()');
+      await js(`runScan(id => window.electronAPI.refreshTree(${JSON.stringify(folderPath)}, currentScanFilters, id))`);
+      await waitFor('!scanInProgress && currentResult?.readOnly === false');
+      const ordinaryMs = await js(`performance.now() - ${ordinaryStarted}`);
+      console.log('PERF ordinary scan of same folder ms', Math.round(ordinaryMs), 'files', await js('currentResult.fileCount'));
+      console.log('PASS: compare reports Added: 1 after one file was added to the saved location.');
+    }
+  }
   assert.deepEqual(requests, []);
   assert.deepEqual(rendererErrors, []);
   assert.equal(fsSync.existsSync(mainRequire('./mft-scanner').getMftScannerPath(false)), true);
   console.log('PASS: hidden Electron startup, real preload/IPC, local fonts/D3, scan, rename/history restore/redo without rescan, Copy/Paste and verified Undo/Redo, independent largest/type views and drilldown, paged preview, themed recycle/messages in both themes, OK/Escape, literal errors, cache totals and zero HTTP requests.');
   if (realRecycle) {
+    const scansBeforeRecycleRestore = scans;
     await assert.rejects(fs.stat(path.join(folderPath, 'renamed.txt')), { code: 'ENOENT' });
     await js('document.getElementById("history-btn").click()');
     await waitFor('document.querySelector("#history-rows tr button")?.textContent === "Restore from Recycle Bin"');
@@ -452,7 +614,7 @@ async function run() {
     await waitFor('!fileActionInProgress && document.querySelector("#history-rows tr").textContent.includes("Restored from Recycle Bin")');
     assert.equal(await fs.readFile(path.join(folderPath, 'renamed.txt'), 'utf8'), '{"enabled":true}');
     assert.equal(await js('currentResult.fileCount'), 3);
-    assert.equal(scans, 1);
+    assert.equal(scans, scansBeforeRecycleRestore, 'restoring a file never starts another full scan');
     await js('document.getElementById("history-close").click()');
     const folderRestore = path.join(folderPath, 'restore-folder');
     await fs.mkdir(path.join(folderRestore, 'nested'), { recursive: true });
@@ -468,7 +630,7 @@ async function run() {
     await js('document.querySelector("#history-rows tr button").click()');
     await waitFor('!fileActionInProgress && currentResult?.fileCount === 4');
     assert.equal(await fs.readFile(path.join(folderRestore, 'nested', 'child.txt'), 'utf8'), 'folder restore fixture');
-    assert.equal(scans, 2, 'file and folder restores never start another full scan');
+    assert.equal(scans, scansBeforeRecycleRestore + 1, 'file and folder restores never start another full scan');
     await js('document.getElementById("history-close").click()');
     // Recover only this test's earlier Undo-copy fixture before the runner
     // removes its temporary tree; do not leave it in the user's bin.
@@ -580,6 +742,11 @@ async function run() {
     await js('document.getElementById("destination-confirm").click()');
     await waitFor('!fileActionInProgress && !copyDialog.open && currentResult?.fileCount === 2');
     assert.equal(await fs.readFile(path.join(pasteRoot, 'first', 'source', 'child.txt'), 'utf8'), 'paste UI fixture');
+    await waitFor('document.getElementById("message-dialog").open');
+    await js('document.getElementById("message-close").click()');
+    await waitFor('!document.getElementById("message-dialog").open');
+    await contextAction('source', 'copy');
+    await waitFor('copiedItemName === "source"');
     const navigate = async name => {
       await waitFor(`!fileActionInProgress && !scanInProgress`);
       await js(`diskTreemap.navigateToFolder(virtualTree.root.children.find(item => item.name === ${JSON.stringify(name)}))`);
@@ -587,11 +754,19 @@ async function run() {
     };
     await navigate('second');
     assert.equal(await js('document.getElementById("paste-btn") === null'), true);
+    assert.equal(await js('copiedItemName'), 'source');
     await js(`treemapCanvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 700, clientY: 500 }));
       document.querySelector('[data-file-action="paste"]').click();`);
     await waitFor('!fileActionInProgress && !copyDialog.open && currentResult?.fileCount === 3');
     assert.equal(await fs.readFile(path.join(pasteRoot, 'second', 'source', 'child.txt'), 'utf8'), 'paste UI fixture');
     assert.equal(await fs.readFile(path.join(pasteRoot, 'source', 'child.txt'), 'utf8'), 'paste UI fixture');
+    await waitFor('document.getElementById("message-dialog").open');
+    await js('document.getElementById("message-close").click()');
+    await waitFor('!document.getElementById("message-dialog").open');
+    await navigate('source');
+    await contextAction('source', 'copy');
+    await waitFor('copiedItemName === "source"');
+    await navigate('second');
     await js(`treemapCanvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 700, clientY: 500 }));
       document.querySelector('[data-file-action="paste"]').click();`);
     await waitFor('!fileActionInProgress && document.getElementById("message-dialog").open');
@@ -765,7 +940,7 @@ async function run() {
       document.getElementById('metric-duration').textContent = '—';
       document.getElementById('metric-rate').textContent = 'Demo only; not benchmarked';
       document.getElementById('files-loaded').textContent = 'Sample data · benchmark results not shown';
-      document.getElementById('disk-capacity-card').hidden = true;
+      document.getElementById('volume-capacity').hidden = true;
       document.getElementById('action-toast').hidden = true;
       document.querySelector('.sidebar').scrollTop = 0;
       return JSON.stringify({
@@ -773,7 +948,7 @@ async function run() {
         rate: document.getElementById('metric-rate').textContent,
         path: document.getElementById('location-label').textContent,
         containsTemporaryPath: document.body.innerText.includes(root),
-        capacityHidden: document.getElementById('disk-capacity-card').hidden,
+        capacityHidden: document.getElementById('volume-capacity').hidden,
         toastHidden: document.getElementById('action-toast').hidden
       });
     })()`);
@@ -810,6 +985,58 @@ async function run() {
       (await window.webContents.capturePage()).toPNG());
     console.log(`PASS: captured four Diskoryx product screenshots in ${screenshotDirectory}.`);
   }
+}
+
+async function runArchiveReopen(js) {
+  // A second Electron process opens the archive written by the first one, so
+  // reopening is verified after a real application restart.
+  const expected = JSON.parse(process.env.DISKORYX_SMOKE_ARCHIVE_EXPECT || 'null');
+  assert.equal(await js('document.getElementById("archive-badge").hidden'), true);
+  const state = JSON.parse(await js(`(async () => {
+    document.getElementById('open-scan-btn').click();
+    for (let attempt = 0; attempt < 400; attempt++) {
+      if (!scanInProgress && currentResult?.readOnly
+        && document.querySelectorAll('.virtual-tree-row').length > 0) break;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    return JSON.stringify({
+      readOnly: currentResult?.readOnly === true,
+      files: currentResult?.fileCount, folders: currentResult?.folderCount,
+      bytes: currentResult?.totalSizeBytes, savedAt: currentResult?.archive?.savedAt,
+      badge: document.getElementById('archive-badge').textContent,
+      badgeHidden: document.getElementById('archive-badge').hidden,
+      scanMode: document.getElementById('scan-mode').textContent,
+      scanModeHidden: document.getElementById('scan-mode').hidden,
+      rows: document.querySelectorAll('.virtual-tree-row').length,
+      metrics: document.getElementById('metric-files').textContent,
+      scanInProgress
+    });
+  })()`));
+  assert.equal(state.readOnly, true, 'the saved scan must open read-only');
+  assert.equal(state.scanInProgress, false);
+  assert.equal(state.badgeHidden, false);
+  assert.match(state.badge, /read-only/);
+  assert.equal(state.scanModeHidden, false);
+  assert.equal(state.scanMode, 'Saved · Read-only');
+  assert.match(state.savedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.ok(state.rows > 0, 'the reopened tree must render rows');
+  if (expected) {
+    assert.equal(state.files, expected.files);
+    assert.equal(state.folders, expected.folders);
+    assert.equal(state.bytes, expected.bytes);
+    assert.equal(state.metrics, expected.files.toLocaleString());
+  }
+  const blocked = await js(`window.electronAPI.renameFile(currentResult.folderPath + '\\example.log', 'renamed.txt', currentScanId)`);
+  assert.match(blocked.error, /saved scan/i);
+  const preview = await js(`window.electronAPI.readTextPreview(currentScanId, currentResult.folderPath + '\\example.log', 0, null)`);
+  assert.match(preview.error, /saved scan/i);
+  await js(`showFileContextMenu({ type: 'file', name: 'example.log', path: currentResult.folderPath + '\\example.log', size: '1 KB' }, { preventDefault() {}, clientX: 20, clientY: 20 })`);
+  assert.equal(await js('document.getElementById("message-dialog").open'), true);
+  assert.equal(await js('document.getElementById("message-title").textContent'), 'Saved scan: read-only');
+  assert.match(await js('document.getElementById("message-text").textContent'), /are disabled/);
+  assert.deepEqual(requests, []);
+  assert.deepEqual(rendererErrors, []);
+  console.log('PASS: saved scan reopened in a fresh Electron process, read-only, no scan, no live actions and no HTTP.');
 }
 
 run().then(() => finish(0), error => {

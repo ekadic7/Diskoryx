@@ -29,6 +29,10 @@ const includeExtensionsInput = document.getElementById('include-extensions');
 const excludeExtensionsInput = document.getElementById('exclude-extensions');
 const excludeFoldersInput = document.getElementById('exclude-folders');
 const scanFiltersError = document.getElementById('scan-filters-error');
+const saveScanButton = document.getElementById('save-scan-btn');
+const openScanButton = document.getElementById('open-scan-btn');
+const findDuplicatesButton = document.getElementById('find-duplicates-btn');
+const saveArchiveDialog = document.getElementById('save-archive-dialog');
 
 let currentFolderPath = null;
 let currentResult = null;
@@ -108,20 +112,48 @@ async function createFolderInScan(folderId, onError, expectedScanId = currentSca
   }
 }
 
+let messageToken = 0;
+let successDialogTimeout = null;
+
 function showAppMessage(message, title = 'Unable to complete action') {
+  clearTimeout(successDialogTimeout);
+  ++messageToken;
   document.getElementById('message-title').textContent = title;
   document.getElementById('message-text').textContent = message;
   if (!messageDialog.open) messageDialog.showModal();
   document.getElementById('message-close').focus();
 }
 
-function showActionToast(message) {
+function showSuccessDialog(message, title = 'Done') {
+  clearTimeout(successDialogTimeout);
+  const token = ++messageToken;
+  document.getElementById('message-title').textContent = title;
+  document.getElementById('message-text').textContent = message;
+  if (!messageDialog.open) messageDialog.showModal();
+  document.getElementById('message-close').focus();
+  successDialogTimeout = setTimeout(() => {
+    if (messageDialog.open && token === messageToken) messageDialog.close();
+  }, 10000);
+}
+
+messageDialog.addEventListener('close', () => {
+  clearTimeout(successDialogTimeout);
+  ++messageToken;
+});
+
+function showActionToast(message, { persistent = false, duration = 2200 } = {}) {
   actionToast.textContent = message;
   actionToast.hidden = false;
   clearTimeout(actionToastTimeout);
+  if (persistent) return;
   actionToastTimeout = setTimeout(() => {
     actionToast.hidden = true;
-  }, 2200);
+  }, duration);
+}
+
+function hideActionToast() {
+  clearTimeout(actionToastTimeout);
+  actionToast.hidden = true;
 }
 
 function loadSavedScanFilters() {
@@ -202,6 +234,12 @@ function renderFiles(items, parent) {
 function showFileContextMenu(file, event) {
   event.preventDefault();
   if (scanInProgress || fileActionInProgress) return;
+  if (currentResult?.readOnly) {
+    fileContextMenu.hidden = true;
+    showFileDetails(file);
+    showAppMessage('This result was opened from a saved scan file, so Rename, Recycle, Copy/Move, Create folder, file preview and Explorer access are disabled. Use Rescan to read the original location again.', 'Saved scan: read-only');
+    return;
+  }
   contextFile = file;
   contextScanId = currentScanId;
   for (const button of fileContextMenu.querySelectorAll('[data-file-action]')) {
@@ -249,6 +287,7 @@ fileContextMenu.addEventListener('click', async (event) => {
       if (!result.success) throw new Error(result.error || 'Unable to copy selection.');
       copiedItemName = result.name;
       copiedItemPath = file.path;
+      ++copySelectionToken;
       transferMode = action;
       updatePasteAvailability();
       showActionToast(`${result.name} selected. Use "Choose where to ${action}..." beside the file tree.`);
@@ -290,7 +329,7 @@ fileContextMenu.addEventListener('click', async (event) => {
   }
 });
 
-async function refreshAfterFileAction(action) {
+async function refreshAfterFileAction(action, { successDialog = false } = {}) {
   const mapFolderId = diskTreemap?.frame?.folderId || 0;
   const query = currentSearchQuery;
   ++sortRequestId;
@@ -321,9 +360,12 @@ async function refreshAfterFileAction(action) {
       await virtualTree.revealItem(selection);
     }
     if (action.item) showFileDetails(action.item);
-    showActionToast(action.actionLabel || (action.item ? 'Item renamed' : 'Item moved to Recycle Bin'));
+    if (successDialog) showSuccessDialog(action.actionLabel || 'Item copied', 'Copied successfully');
+    else if (!action.silent) showActionToast(action.actionLabel || (action.item ? 'Item renamed' : 'Item moved to Recycle Bin'));
   } catch (error) {
-    showActionToast(`File action completed, but the view could not be updated: ${error.message}`);
+    const warning = `File action completed, but the view could not be updated: ${error.message}`;
+    if (successDialog) showAppMessage(warning, 'Copied, but view not updated');
+    else showActionToast(warning);
     if (!currentResult) {
       virtualTree?.clear();
       diskTreemap?.clear();
@@ -462,6 +504,11 @@ function updateScanMode(result) {
     badge.title = '';
     return;
   }
+  if (result.readOnly) {
+    badge.textContent = 'Saved \u00b7 Read-only';
+    badge.title = 'This result came from a saved scan file. File actions and live previews are disabled; use Rescan for a current result.';
+    return;
+  }
   const fast = result.scanMode === 'mft';
   const label = fast ? 'Fast \u00b7 MFT' : 'Standard \u00b7 Filesystem';
   badge.textContent = result.scanModeReason ? `${label} \u2014 ${result.scanModeReason}` : label;
@@ -491,15 +538,43 @@ async function syncTreeToMapItem(item) {
   }
 }
 
+function updateArchiveBadge(result) {
+  const badge = document.getElementById('archive-badge');
+  const savedAt = result?.archive?.savedAt;
+  if (!result?.readOnly || !savedAt) {
+    badge.hidden = true;
+    badge.textContent = '';
+    badge.title = '';
+    archiveBar.hidden = true;
+    archivedAtLabel = '';
+    return;
+  }
+  const capture = new Date(savedAt);
+  const when = Number.isNaN(capture.getTime()) ? 'unknown date' : capture.toLocaleString();
+  badge.textContent = `Saved scan · ${when} · read-only`;
+  badge.title = 'Loaded from a saved scan file: no live filesystem access. File actions, previews and Explorer access are disabled. Use Rescan to scan the original location again.';
+  badge.hidden = false;
+  archiveBarTime.textContent = `Snapshot taken ${when}`;
+  archivedAtLabel = when;
+  archiveBar.hidden = false;
+}
+
 function renderResult(result, updateMap = true) {
   if (!result || !result.success) {
     updateScanMode(null);
     exportCsvButton.disabled = true;
+    saveScanButton.disabled = true;
+    findDuplicatesButton.disabled = true;
     showMessage(result?.error || 'Unable to scan this folder.');
     return;
   }
 
   exportCsvButton.disabled = false;
+  saveScanButton.disabled = false;
+  findDuplicatesButton.disabled = result.readOnly === true;
+  updateArchiveBadge(result);
+  compareScanButton.hidden = !result.readOnly;
+  hideCompareView();
   updateScanMode(result);
   currentResult = result;
   currentFolderPath = result.folderPath;
@@ -521,7 +596,7 @@ function renderResult(result, updateMap = true) {
   const filteredText = result.filteredCount || result.excludedFolderCount
     ? ` | Filtered ${result.filteredCount || 0} files / ${result.excludedFolderCount || 0} folders`
     : '';
-  statsBadge.textContent = `${result.fileCount} files | ${result.totalSizeFormatted}${skippedText}${filteredText}`;
+  statsBadge.textContent = `${result.totalSizeFormatted}${skippedText}${filteredText}`;
   filesLoaded.textContent = `Files loaded: ${result.fileCount}`;
   filesLoaded.textContent += ` | ${formatDuration(result.scanDurationMs)} | ${formatRate(result.entriesPerSecond)}`;
   lastUpdated.textContent = `Last updated: ${new Date().toLocaleTimeString()}`;
@@ -531,13 +606,15 @@ function renderResult(result, updateMap = true) {
 
 let scanInProgress = false;
 let scanRequestId = 0;
+let scanOperation = 'scan';
 let cancellationRequested = false;
 let folderDialogOpen = false;
 const scanControls = [
   'scan-drive-btn', 'drive-select', 'folder-picker-btn', 'refresh-btn',
   'scan-filters-btn', 'sort-select', 'search-input',
   'search-btn', 'export-csv-btn', 'expand-all-btn', 'collapse-all-btn',
-  'collapse-tree-folders-btn', 'choose-drives-btn', 'saved-scans-select'
+  'collapse-tree-folders-btn', 'choose-drives-btn', 'saved-scans-select',
+  'save-scan-btn', 'open-scan-btn', 'find-duplicates-btn'
 ].map(id => document.getElementById(id));
 const disabledBeforeScan = new Map();
 const disabledBeforeFileAction = new Map();
@@ -555,6 +632,8 @@ function setFileActionBusy(busy) {
   if (!busy) {
     disabledBeforeFileAction.clear();
     exportCsvButton.disabled = !currentScanId || !currentResult;
+    saveScanButton.disabled = !currentScanId || !currentResult;
+    findDuplicatesButton.disabled = !currentScanId || !currentResult || currentResult.readOnly === true;
   }
   if (typeof updatePasteAvailability === 'function') updatePasteAvailability();
 }
@@ -572,10 +651,12 @@ function setScanControls(busy) {
     disabledBeforeScan.clear();
     scanDriveButton.disabled = typeof hasChosenDrives === 'function' ? !hasChosenDrives() : !driveSelect.value;
     exportCsvButton.disabled = !currentScanId;
+    saveScanButton.disabled = !currentScanId || !currentResult;
+    findDuplicatesButton.disabled = !currentScanId || !currentResult || currentResult.readOnly === true;
   }
   stopScanButton.hidden = !busy;
   stopScanButton.disabled = false;
-  stopScanButton.textContent = 'Stop scan';
+  stopScanButton.textContent = scanOperation === 'duplicates' ? 'Stop duplicate scan' : 'Stop scan';
   if (typeof updatePasteAvailability === 'function') updatePasteAvailability();
 }
 
@@ -583,16 +664,17 @@ if (window.electronAPI?.onScanProgress) {
   window.electronAPI.onScanProgress((progress) => {
     if (!scanInProgress || cancellationRequested || progress.requestId !== scanRequestId) return;
     updateScanMode(progress);
-    showMessage(
-      `Scanning... ${progress.scannedEntries.toLocaleString()} items | ${formatRate(progress.entriesPerSecond)} | ${formatDuration(progress.elapsedMs)} elapsed | ${progress.filteredCount.toLocaleString()} filtered | ${progress.skippedCount.toLocaleString()} skipped`,
-      true
-    );
+    showMessage(progress.phase === 'archive'
+      ? `Opening saved scan... ${progress.scannedEntries.toLocaleString()} of ${(progress.fileCount + progress.folderCount).toLocaleString()} items read | ${formatDuration(progress.elapsedMs)} elapsed`
+      : `Scanning... ${progress.scannedEntries.toLocaleString()} items | ${formatRate(progress.entriesPerSecond)} | ${formatDuration(progress.elapsedMs)} elapsed | ${progress.filteredCount.toLocaleString()} filtered | ${progress.skippedCount.toLocaleString()} skipped`,
+    true);
   });
 }
 
 async function runScan(request) {
   if (scanInProgress || fileActionInProgress || folderDialogOpen) return;
   const requestId = ++scanRequestId;
+  scanOperation = 'scan';
   scanInProgress = true;
   cancellationRequested = false;
   setScanControls(true);
@@ -630,7 +712,7 @@ stopScanButton.addEventListener('click', async () => {
   cancellationRequested = true;
   stopScanButton.disabled = true;
   stopScanButton.textContent = 'Stopping...';
-  showMessage('Stopping scan...', true);
+  showMessage(scanOperation === 'duplicates' ? 'Stopping duplicate analysis...' : 'Stopping scan...', true);
   try {
     const result = await window.electronAPI.cancelScan(requestId);
     if (!result.success) throw new Error(result.error || 'Unable to stop scan.');
@@ -660,6 +742,218 @@ exportCsvButton.addEventListener('click', async () => {
   } finally {
     exportCsvButton.disabled = scanInProgress || !currentScanId;
   }
+});
+
+function archiveSummary(result) {
+  if (!result) return '';
+  const archivable = result.readOnly ? 'This is a saved scan, so its file is written again from the loaded result.' : 'This is a live scan result.';
+  return `${result.fileCount.toLocaleString()} files · ${result.folderCount.toLocaleString()} folders · ${result.folderPath}. ${archivable}`;
+}
+
+saveScanButton.addEventListener('click', () => {
+  if (!currentScanId || !currentResult || scanInProgress || fileActionInProgress) return;
+  document.getElementById('save-archive-location').textContent = archiveSummary(currentResult);
+  saveArchiveDialog.showModal();
+});
+
+document.getElementById('save-archive-cancel').addEventListener('click', () => saveArchiveDialog.close());
+
+document.getElementById('save-archive-confirm').addEventListener('click', async () => {
+  saveArchiveDialog.close();
+  if (!currentScanId || !currentResult || scanInProgress || fileActionInProgress) return;
+  const scanId = currentScanId;
+  saveScanButton.disabled = true;
+  try {
+    const result = await window.electronAPI.saveScanArchive(scanId);
+    if (result.cancelled) return;
+    if (!result.success) throw new Error(result.error || 'Unable to save this scan.');
+    showAppMessage(`Saved ${(result.fileCount + result.folderCount).toLocaleString()} items to:\n${result.filePath}\n\nThe file stays on this device and is not uploaded.`, 'Scan saved');
+  } catch (error) {
+    showAppMessage(error.message, 'Scan not saved');
+  } finally {
+    saveScanButton.disabled = scanInProgress || !currentScanId;
+  }
+});
+
+async function runArchiveOpen() {
+  if (scanInProgress || fileActionInProgress || folderDialogOpen) return;
+  const requestId = ++scanRequestId;
+  scanInProgress = true;
+  cancellationRequested = false;
+  setScanControls(true);
+  document.dispatchEvent(new Event('diskoryx:scan-start'));
+  sortRequestId++;
+  virtualTree?.clear();
+  fileContextMenu.hidden = true;
+  updateScanMode(null);
+  updateArchiveBadge(null);
+  showMessage('Choose a saved scan file...', true);
+  try {
+    const result = await window.electronAPI.openScanArchive(requestId);
+    if (result.cancelled) {
+      if (currentResult) renderResult(currentResult);
+      else {
+        updateScanMode(null);
+        showMessage('Select a folder or drive to scan.');
+      }
+      return;
+    }
+    if (!result.success) throw new Error(result.error || 'Unable to open the saved scan.');
+    currentSearchQuery = '';
+    document.getElementById('search-input').value = '';
+    renderResult(result);
+    showActionToast('Saved scan opened read-only. Rescan for a live result.');
+  } catch (error) {
+    updateScanMode(null);
+    if (currentResult) renderResult(currentResult);
+    else showMessage('Select a folder or drive to scan.');
+    showAppMessage(`Unable to open the saved scan: ${error.message}`, 'Saved scan not opened');
+  } finally {
+    scanInProgress = false;
+    cancellationRequested = false;
+    setScanControls(false);
+  }
+}
+
+openScanButton.addEventListener('click', () => { void runArchiveOpen(); });
+
+const scanMenuButton = document.getElementById('scan-menu-btn');
+const scanMenuList = document.getElementById('scan-menu');
+function setScanMenuOpen(open) {
+  scanMenuList.hidden = !open;
+  scanMenuButton.setAttribute('aria-expanded', String(open));
+}
+scanMenuButton.addEventListener('click', () => setScanMenuOpen(scanMenuList.hidden));
+scanMenuList.addEventListener('click', event => {
+  if (event.target.closest('button')) setScanMenuOpen(false);
+});
+document.addEventListener('click', event => {
+  if (!scanMenuList.hidden && !event.target.closest('.scan-menu')) setScanMenuOpen(false);
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !scanMenuList.hidden) {
+    setScanMenuOpen(false);
+    scanMenuButton.focus();
+  }
+});
+
+const compareScanButton = document.getElementById('compare-scan-btn');
+const compareView = document.getElementById('compare-view');
+const archiveBar = document.getElementById('archive-bar');
+const archiveBarTime = document.getElementById('archive-bar-time');
+let archivedAtLabel = '';
+const compareRows = document.getElementById('compare-rows');
+const compareKind = document.getElementById('compare-kind');
+const compareQuery = document.getElementById('compare-query');
+const compareSort = document.getElementById('compare-sort');
+const comparePrev = document.getElementById('compare-prev');
+const compareNext = document.getElementById('compare-next');
+const compareBack = document.getElementById('compare-back-btn');
+const COMPARE_PAGE_SIZE = 100;
+let compareOffset = 0;
+let compareTotal = 0;
+
+function formatBytesSigned(bytes) {
+  const sign = bytes > 0 ? '+' : bytes < 0 ? '−' : '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let value = Math.abs(bytes);
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${sign}${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
+
+async function loadComparePage(offset = 0) {
+  const page = await window.electronAPI.comparePage(compareKind.value, {
+    offset,
+    limit: COMPARE_PAGE_SIZE,
+    query: compareQuery.value,
+    sortBy: compareSort.value
+  });
+  if (!page.success) throw new Error(page.error || 'Unable to read the comparison.');
+  compareOffset = offset;
+  compareTotal = page.totalCount;
+  compareRows.replaceChildren(...page.rows.map(row => {
+    const tr = document.createElement('tr');
+    const path = document.createElement('td');
+    path.className = 'compare-path';
+    path.textContent = row.path;
+    const change = document.createElement('td');
+    change.textContent = `${compareKind.value === 'added' ? 'Added' : compareKind.value === 'removed' ? 'Removed' : 'Changed'} · ${formatBytesSigned(row.deltaBytes)}`;
+    tr.append(path, change);
+    return tr;
+  }));
+  const first = page.totalCount ? offset + 1 : 0;
+  const last = offset + page.rows.length;
+  document.getElementById('compare-page-info').textContent = `Showing ${first}–${last} of ${page.totalCount}`;
+  comparePrev.disabled = offset === 0;
+  compareNext.disabled = last >= page.totalCount;
+}
+
+function renderCompareSummary(result) {
+  const { summary } = result;
+  document.getElementById('compare-times').textContent = `Before: ${archivedAtLabel || 'saved scan'} · After: ${new Date().toLocaleString()}`;
+  document.getElementById('compare-counts').textContent = `Added: ${summary.counts.added} · Removed: ${summary.counts.removed} · Changed: ${summary.counts.changed} · Net logical size change: ${formatBytesSigned(summary.deltaBytes)}${summary.identical ? ' · The saved scan and the current state are identical.' : ''}`;
+  const identity = document.getElementById('compare-identity');
+  identity.textContent = result.verified ? '' : 'Source identity could not be verified for this older saved scan. Results may not match the same location.';
+  identity.hidden = result.verified;
+}
+
+function showCompareView() {
+  document.querySelector('.scan-overview').hidden = true;
+  document.querySelector('.app-content').hidden = true;
+  document.getElementById('analysis-panel').hidden = true;
+  compareView.hidden = false;
+}
+
+function hideCompareView() {
+  compareView.hidden = true;
+  document.querySelector('.scan-overview').hidden = false;
+  document.querySelector('.app-content').hidden = false;
+}
+
+async function runCompare() {
+  if (scanInProgress || fileActionInProgress || folderDialogOpen) return;
+  const requestId = ++scanRequestId;
+  scanOperation = 'compare';
+  scanInProgress = true;
+  cancellationRequested = false;
+  setScanControls(true);
+  // Hide any previous result so an old comparison is never shown as the new one.
+  hideCompareView();
+  showActionToast('Comparing with the current state… this can take a while.', { persistent: true });
+  try {
+    const result = await window.electronAPI.compareWithCurrent(requestId);
+    if (result.cancelled) return;
+    if (!result.success) throw new Error(result.error || 'Compare did not finish.');
+    renderCompareSummary(result);
+    // Open the first change list that has entries, so a single removed file is visible.
+    const { counts } = result.summary;
+    compareKind.value = ['added', 'removed', 'changed'].find(kind => counts[kind] > 0) || 'added';
+    compareQuery.value = '';
+    compareSort.value = 'path';
+    await loadComparePage(0);
+    showCompareView();
+  } catch (error) {
+    showAppMessage(`Compare failed: ${error.message}`, 'Compare not finished');
+  } finally {
+    hideActionToast();
+    scanInProgress = false;
+    cancellationRequested = false;
+    setScanControls(false);
+  }
+}
+
+compareScanButton.addEventListener('click', () => { void runCompare(); });
+compareBack.addEventListener('click', () => hideCompareView());
+[compareKind, compareQuery, compareSort].forEach(control => control.addEventListener(control === compareQuery ? 'input' : 'change', () => { void loadComparePage(0).catch(error => showAppMessage(error.message, 'Compare')); }));
+comparePrev.addEventListener('click', () => { void loadComparePage(Math.max(0, compareOffset - COMPARE_PAGE_SIZE)).catch(error => showAppMessage(error.message, 'Compare')); });
+compareNext.addEventListener('click', () => { void loadComparePage(compareOffset + COMPARE_PAGE_SIZE).catch(error => showAppMessage(error.message, 'Compare')); });
+
+document.addEventListener('diskoryx:scan-start', () => {
+  updateArchiveBadge(null);
 });
 
 async function populateDriveSelect() {

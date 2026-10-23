@@ -28,11 +28,57 @@ function formatCapacity(bytes) {
   return `${value.toFixed(unit > 0 && value < 10 ? 1 : 0)} ${units[unit]}`;
 }
 
+function formatCapacityTime(ms) {
+  return new Date(ms).toLocaleString();
+}
+
+// Saved scans never show today's capacity; they show the value recorded during the scan.
+function renderSavedCapacity(capacity) {
+  if (!capacity || !Number.isFinite(capacity.totalBytes) || !Number.isFinite(capacity.capturedAt)) {
+    renderVolumeCapacity({ used: 'Not available', free: 'Not available', total: 'Not available', label: 'Recorded capacity' });
+    return;
+  }
+  const free = Math.min(capacity.totalBytes, capacity.availableBytes);
+  renderVolumeCapacity({
+    used: formatCapacity(capacity.totalBytes - free),
+    free: formatCapacity(free),
+    total: formatCapacity(capacity.totalBytes),
+    label: `Recorded ${formatCapacityTime(capacity.capturedAt)}`,
+    title: 'Historical value captured during the original scan, not current disk state.'
+  });
+}
+
+// One compact row under the location line: Volume · Used · Free · Total.
+// `label` says whether the figures are current or a recorded historical value.
+function renderVolumeCapacity({ used, free, total, label, title }) {
+  const row = document.getElementById('volume-capacity');
+  row.replaceChildren();
+  row.hidden = false;
+  row.title = title || '';
+  const items = [
+    ['Used', used],
+    ['Free', free],
+    ['Total', total]
+  ];
+  if (label) items.unshift(['', label]);
+  for (const [name, value] of items) {
+    const item = document.createElement('span');
+    item.className = name ? 'volume-capacity-item' : 'volume-capacity-label';
+    if (name) {
+      const key = document.createElement('span');
+      key.className = 'volume-capacity-key';
+      key.textContent = name;
+      item.append(key);
+    }
+    const val = document.createElement('strong');
+    val.textContent = value;
+    item.append(val);
+    row.append(item);
+  }
+}
+
 function showCapacityError(message) {
-  document.getElementById('capacity-free').textContent = 'Unavailable';
-  document.getElementById('capacity-total').textContent = message;
-  document.getElementById('capacity-volume').textContent = '';
-  document.getElementById('capacity-track').hidden = true;
+  renderVolumeCapacity({ used: 'Unavailable', free: 'Unavailable', total: 'Unavailable', label: message });
 }
 
 function setPaneShare(share) {
@@ -92,7 +138,8 @@ document.querySelectorAll('[data-view]').forEach(button => {
 
 document.addEventListener('diskoryx:result', event => {
   const result = event.detail;
-  document.getElementById('location-label').textContent = result.folderPath;
+  const driveRoot = /^([A-Za-z]:)[\\/]?$/.exec(result.folderPath);
+  document.getElementById('location-label').textContent = driveRoot ? `Drive ${driveRoot[1]}` : result.folderPath;
   document.getElementById('location-label').title = result.folderPath;
   document.getElementById('metric-size').textContent = result.totalSizeFormatted;
   document.getElementById('metric-files').textContent = result.fileCount.toLocaleString();
@@ -102,11 +149,12 @@ document.addEventListener('diskoryx:result', event => {
   document.getElementById('metric-skipped').textContent = (result.skippedCount || 0).toLocaleString();
   document.getElementById('metric-coverage').textContent = `${result.filteredCount || 0} files filtered / ${result.excludedFolderCount || 0} folders excluded`;
   const requestId = ++capacityRequestId;
-  const card = document.getElementById('disk-capacity-card');
-  card.hidden = false;
-  document.getElementById('capacity-free').textContent = 'Checking...';
-  document.getElementById('capacity-total').textContent = 'Reading current volume capacity';
-  document.getElementById('capacity-track').hidden = false;
+  if (result.readOnly) {
+    // A saved scan shows only what was recorded when it was scanned.
+    renderSavedCapacity(result.capacity);
+    return;
+  }
+  renderVolumeCapacity({ used: 'Checking...', free: 'Checking...', total: 'Checking...', label: '' });
   void window.electronAPI.volumeCapacity(result.scanId).then(capacity => {
     if (requestId !== capacityRequestId) return;
     if (!capacity.success) throw new Error(capacity.error || 'Capacity information is unavailable.');
@@ -116,15 +164,12 @@ document.addEventListener('diskoryx:result', event => {
       throw new Error('Windows returned invalid volume capacity.');
     }
     const free = Math.min(total, available);
-    const usedPercent = Math.max(0, Math.min(100, (total - free) / total * 100));
-    const volumePath = typeof capacity.volumePath === 'string' ? capacity.volumePath : '';
-    document.getElementById('capacity-volume').textContent = volumePath.replace(/[\\/]+$/, '') || volumePath;
-    document.getElementById('capacity-free').textContent = formatCapacity(free);
-    document.getElementById('capacity-total').textContent = `free of ${formatCapacity(total)} total`;
-    const track = document.getElementById('capacity-track');
-    track.setAttribute('aria-valuenow', String(Math.round(usedPercent)));
-    track.setAttribute('aria-valuetext', `${Math.round(usedPercent)}% used`);
-    document.getElementById('capacity-fill').style.width = `${usedPercent}%`;
+    renderVolumeCapacity({
+      used: formatCapacity(total - free),
+      free: formatCapacity(free),
+      total: formatCapacity(total),
+      label: 'Whole volume · current'
+    });
   }).catch(error => {
     if (requestId === capacityRequestId) showCapacityError(error.message);
   });

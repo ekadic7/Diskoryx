@@ -46,11 +46,13 @@ test('preview CSV and sorting stay byte-identical to working app', () => {
 test('preview bridge preserves original APIs with preview and scan cancellation additions', () => {
   const original = fs.readFileSync(path.join(baselineRoot, 'preload.js'), 'utf8');
   const preview = fs.readFileSync(preloadPath, 'utf8');
-  const withoutConfirmation = preview.replace(/\ton(?:RecycleConfirmation(?:Closed)?|CopyProgress|LiveUpdate): \(callback\) => \{[\s\S]*?\n\t\},\r?\n/g, '');
+  const withoutConfirmation = preview.replace(/\ton(?:RecycleConfirmation(?:Closed)?|CopyProgress|LiveUpdate|DuplicateProgress): \(callback\) => \{[\s\S]*?\n\t\},\r?\n/g, '');
   assert.equal(withoutConfirmation.replace(/\r\n/g, '\n')
     .replace(/^[ \t]*confirmRecycle:.*\n/gm, '')
     .replace(/^[ \t]*(?:analysisPage|actionHistory|restoreName):.*\n/gm, '')
     .replace(/^[ \t]*(?:listSavedScans|activateSavedScan):.*\n/gm, '')
+    .replace(/^[ \t]*(?:compareWithCurrent|comparePage):.*\n/gm, '')
+    .replace(/^[ \t]*findDuplicates:.*\n/gm, '')
     .replace(/^[ \t]*volumeCapacity:.*\n/gm, '')
     .replace(/^[ \t]*openSupportPage:.*\n/gm, '')
     .replace(/^[ \t]*moveHistoryAction:.*\n/gm, '')
@@ -58,6 +60,7 @@ test('preview bridge preserves original APIs with preview and scan cancellation 
     .replace(/^[ \t]*createFolder:.*\n/gm, '')
     .replace(/^[ \t]*(?:copyItem|pasteItem|cancelCopy|copyHistoryAction|restoreRecycledItem):.*\n/gm, '')
     .replace(/^[ \t]*(?:readTextPreview|cancelScan|renameFile|deleteFile):.*\n/gm, '')
+    .replace(/^[ \t]*(?:saveScanArchive|openScanArchive):.*\n/gm, '')
     .replace(/, requestId/g, ''), original.replace(/\r\n/g, '\n')
     .replace(/^[ \t]*(?:renameFile|deleteFile):.*\n/gm, ''));
 });
@@ -154,6 +157,7 @@ test('sidebar navigation requests independent views without changing explorer so
   const events = [];
   const document = {
     ...node(), getElementById: get, querySelector: get,
+    createElement: () => ({ ...element(), textContent: '', className: '' }),
     querySelectorAll: () => buttons,
     dispatchEvent: event => events.push(event)
   };
@@ -179,6 +183,10 @@ test('sidebar navigation requests independent views without changing explorer so
   assert.equal(get('sort-select').value, 'size');
 });
 
+function textOf(node) {
+  return (node.textContent || '') + node.children.map(child => textOf(child)).join(' ');
+}
+
 test('drive-capacity display uses actual volume data and ignores stale replies', async () => {
   const nodes = new Map();
   const get = id => {
@@ -191,6 +199,7 @@ test('drive-capacity display uses actual volume data and ignores stale replies',
   const listeners = new Map();
   const document = {
     getElementById: get,
+    createElement: () => ({ ...element(), textContent: '', className: '' }),
     querySelector: () => ({ style: { setProperty() {} }, addEventListener() {}, setAttribute() {} }),
     querySelectorAll: () => [],
     addEventListener(type, listener) { listeners.set(type, listener); }
@@ -216,10 +225,73 @@ test('drive-capacity display uses actual volume data and ignores stale replies',
   await new Promise(resolve => setImmediate(resolve));
   replies[0].resolve({ success: true, volumePath: 'C:\\', totalBytes: 200 * 1024 ** 3, availableBytes: 150 * 1024 ** 3 });
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(get('disk-capacity-card').hidden, false);
-  assert.equal(get('capacity-volume').textContent, 'D:');
-  assert.equal(get('capacity-free').textContent, '25 GB');
-  assert.equal(get('capacity-total').textContent, 'free of 100 GB total');
-  assert.equal(get('capacity-track').attributes['aria-valuenow'], '75');
-  assert.equal(get('capacity-fill').style.width, '75%');
+  const row = get('volume-capacity');
+  assert.equal(row.hidden, false);
+  const text = textOf(row);
+  assert.equal(text.includes('Whole volume'), true);
+  assert.equal(text.includes('25 GB'), true);
+  assert.equal(text.includes('75 GB'), true);
+  assert.equal(text.includes('100 GB'), true);
+  assert.equal(text.includes('Volume'), false);
+  assert.equal(text.includes('D:'), false);
+});
+
+test('location header shows drive roots as Drive X: and keeps folder paths in full', () => {
+  const nodes = new Map();
+  const get = id => {
+    if (!nodes.has(id)) nodes.set(id, { ...element(), textContent: '', title: '', hidden: false });
+    return nodes.get(id);
+  };
+  const listeners = new Map();
+  const document = {
+    getElementById: get,
+    createElement: () => ({ ...element(), textContent: '', className: '' }),
+    querySelector: () => ({ style: { setProperty() {} }, addEventListener() {}, setAttribute() {} }),
+    querySelectorAll: () => [],
+    addEventListener(type, listener) { listeners.set(type, listener); }
+  };
+  const context = {
+    window: { electronAPI: { volumeCapacity() { return new Promise(() => {}); } } },
+    document,
+    formatDuration: () => '1 s',
+    formatRate: () => '1 item/s'
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(rendererRoot, 'design.js'), 'utf8'), context);
+  const dispatch = folderPath => listeners.get('diskoryx:result')({ detail: { scanId: 7, folderPath, readOnly: true, capacity: null, fileCount: 0, folderCount: 0, totalSizeFormatted: '0 B', scanDurationMs: 0, totalSizeBytes: 0 } });
+  dispatch('C:\\');
+  assert.equal(get('location-label').textContent, 'Drive C:');
+  assert.equal(get('location-label').title, 'C:\\');
+  dispatch('C:\\Users\\Edi');
+  assert.equal(get('location-label').textContent, 'C:\\Users\\Edi');
+});
+
+test('saved scans show only the recorded capacity or Not available, never current capacity', () => {
+  const nodes = new Map();
+  const get = id => {
+    if (!nodes.has(id)) nodes.set(id, { ...element(), textContent: '', hidden: false, title: '', replaceChildren() { this.children = []; }, append(child) { this.children.push(child); } });
+    return nodes.get(id);
+  };
+  const listeners = new Map();
+  const document = {
+    getElementById: get,
+    createElement: () => ({ ...element(), textContent: '', className: '' }),
+    querySelector: () => ({ style: { setProperty() {} }, addEventListener() {}, setAttribute() {} }),
+    querySelectorAll: () => [],
+    addEventListener(type, listener) { listeners.set(type, listener); }
+  };
+  let calls = 0;
+  const context = {
+    window: { electronAPI: { volumeCapacity() { calls++; return Promise.resolve({ success: true, volumePath: 'C:\\', totalBytes: 1, availableBytes: 1 }); } } },
+    document,
+    formatDuration: () => '1 s',
+    formatRate: () => '1 item/s'
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(rendererRoot, 'design.js'), 'utf8'), context);
+  const dispatch = detail => listeners.get('diskoryx:result')({ detail: { scanId: 5, folderPath: 'C:\\', fileCount: 0, folderCount: 0, totalSizeFormatted: '0 B', scanDurationMs: 0, totalSizeBytes: 0, ...detail } });
+
+  dispatch({ readOnly: true, capacity: null });
+  assert.match(textOf(get('volume-capacity')), /Not available/);
+  dispatch({ readOnly: true, capacity: { totalBytes: 200, availableBytes: 50, capturedAt: 1700000000000, volumePath: 'D:\\' } });
+  assert.match(textOf(get('volume-capacity')), /Recorded/);
+  assert.equal(calls, 0);
 });

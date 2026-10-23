@@ -66,7 +66,7 @@ test('Live monitor status and preview badge are not rendered in the app chrome',
 
 test('optional support card is above capacity and contains no embedded remote content', () => {
   const html = fs.readFileSync(renderer, 'utf8');
-  assert(html.indexOf('id="support-card"') < html.indexOf('id="disk-capacity-card"'));
+  assert(html.indexOf('id="support-card"') < html.indexOf('id="volume-capacity"'));
   assert.match(html, /id="support-btn" type="button"/);
   assert.match(html, /Optional support via PayPal on Ko-fi/);
   assert.doesNotMatch(html, /Stripe/);

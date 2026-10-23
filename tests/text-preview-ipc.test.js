@@ -16,7 +16,7 @@ test('preview IPC requires active scan membership and rejects stale scan IDs', a
   const mainRoot = path.join(__dirname, '..', 'src', 'main');
   const rootRequire = createRequire(path.join(mainRoot, 'main.js'));
   vm.runInNewContext(fs.readFileSync(path.join(mainRoot, 'main.js'), 'utf8'), {
-    __dirname: mainRoot, process, console, setImmediate, AbortController,
+    __dirname: mainRoot, process, console, setImmediate, setTimeout, clearTimeout, AbortController,
     require(name) {
       if (name === 'electron') return {
         app: { isPackaged: false, getPath: () => root, setPath() {}, setAppUserModelId() {}, whenReady: () => ({ then() {} }), on() {} },

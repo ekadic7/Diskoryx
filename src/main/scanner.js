@@ -158,7 +158,8 @@ async function scanFolder(folderPath, onProgress = () => {}, scanFilters = {}, s
 
   const root = { folderId: 0, children: [] };
   const filters = normalizeScanFilters(scanFilters);
-  const scanStartedAt = performance.now();
+  const scanStartedAt = Date.now();
+  const scanStartedAtCounter = performance.now();
   const folderNodes = [root];
   const fileNodes = [];
   const pendingDirectories = [{ path: resolvedPath, node: root }];
@@ -174,7 +175,7 @@ async function scanFolder(folderPath, onProgress = () => {}, scanFilters = {}, s
     if (!force && scannedEntries - lastReportedCount < PROGRESS_INTERVAL && now - lastReportedAt < 500) return;
     lastReportedCount = scannedEntries;
     lastReportedAt = now;
-    const elapsedMs = performance.now() - scanStartedAt;
+    const elapsedMs = performance.now() - scanStartedAtCounter;
     const entriesScanned = scannedEntries + stats.skippedCount;
     try {
       onProgress({
@@ -345,12 +346,13 @@ async function scanFolder(folderPath, onProgress = () => {}, scanFilters = {}, s
 
   signal?.throwIfAborted();
   reportProgress(true);
-  const scanDurationMs = performance.now() - scanStartedAt;
+  const scanDurationMs = performance.now() - scanStartedAtCounter;
   const entriesScanned = scannedEntries + stats.skippedCount;
   largestFiles.sort((left, right) => right.rawSize - left.rawSize);
   return {
     success: true,
     folderPath: resolvedPath,
+    scanStartedAt,
     structure: root.children,
     scanFilters: filters,
     folderNodes,

@@ -113,14 +113,17 @@
   }
 
   function select(next, drill = false) {
-    if (!['explorer', 'largest', 'types'].includes(next) || scanInProgress || fileActionInProgress) return;
+    if (!['explorer', 'largest', 'types', 'duplicates'].includes(next) || scanInProgress || fileActionInProgress) return;
     view = next;
     ++request;
     if (!drill) extension = '';
     const analysis = view !== 'explorer';
-    panel.hidden = !analysis;
+    panel.hidden = !analysis || view === 'duplicates';
+    document.getElementById('duplicates-panel').hidden = view !== 'duplicates';
     document.body.classList.toggle('analysis-active', analysis);
-    const title = view === 'largest' ? 'Largest files' : view === 'types' ? 'File types' : 'Disk overview';
+    document.body.classList.toggle('duplicates-active', view === 'duplicates');
+    const title = view === 'largest' ? 'Largest files' : view === 'types' ? 'File types'
+      : view === 'duplicates' ? 'Duplicate finder' : 'Disk overview';
     document.querySelector('.header-left h1').textContent = title;
     document.getElementById('analysis-title').textContent = title;
     document.querySelectorAll('[data-view]').forEach(button => {
@@ -129,6 +132,10 @@
       button.setAttribute('aria-pressed', String(active));
     });
     if (!analysis) return;
+    if (view === 'duplicates') {
+      document.dispatchEvent(new CustomEvent('diskoryx:duplicates-view'));
+      return;
+    }
     order.querySelector('option[value="date"]').disabled = view === 'types';
     if (view === 'types' && order.value === 'date') order.value = 'size';
     const head = document.getElementById('analysis-head');
@@ -144,7 +151,9 @@
     void load();
   }
   document.addEventListener('diskoryx:view', event => select(event.detail));
-  document.addEventListener('diskoryx:result', () => { if (view !== 'explorer') void load(); });
+  document.addEventListener('diskoryx:result', () => {
+    if (view !== 'explorer' && view !== 'duplicates') void load();
+  });
   document.addEventListener('diskoryx:files-changed', () => {
     ++request;
     rows.replaceChildren();
@@ -156,7 +165,9 @@
   document.addEventListener('diskoryx:scan-start', () => {
     // The event occurs after scanInProgress is set; only presentation is reset.
     view = 'explorer'; ++request; panel.hidden = true;
+    document.getElementById('duplicates-panel').hidden = true;
     document.body.classList.remove('analysis-active');
+    document.body.classList.remove('duplicates-active');
     document.querySelector('.header-left h1').textContent = 'Disk overview';
     document.querySelectorAll('[data-view]').forEach(button => {
       button.classList.toggle('is-active', button.dataset.view === 'explorer');

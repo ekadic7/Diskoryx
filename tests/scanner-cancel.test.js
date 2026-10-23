@@ -89,6 +89,11 @@ test('MFT tree finalization preserves totals and is cancellable at event-loop yi
   assert.equal(result.largestFiles.length, 100);
 });
 
+function withoutScanStart(result) {
+  delete result.scanStartedAt;
+  return result;
+}
+
 test('completed standard and MFT scans retain original accounting, filters and tree results', async t => {
   const folder = await fs.mkdtemp(path.join(os.tmpdir(), 'diskoryx-scan-parity-'));
   t.after(() => fs.rm(folder, { recursive: true, force: true }));
@@ -103,9 +108,12 @@ test('completed standard and MFT scans retain original accounting, filters and t
   const originalMft = require('./fixtures/baseline/mft-scanner');
   const current = await scanFolder(folder, undefined, filters, new AbortController().signal);
   const original = await originalStandard.scanFolder(folder, undefined, filters);
+  // Timing metadata (including the wall-clock scan start used by saved scans)
+  // differs by definition and is excluded from the output parity check.
   for (const result of [current, original]) {
     delete result.scanDurationMs;
     delete result.entriesPerSecond;
+    delete result.scanStartedAt;
   }
   assert.deepEqual(current, original);
 
@@ -121,7 +129,7 @@ test('completed standard and MFT scans retain original accounting, filters and t
   const summary = { corruptRecords: 2, unresolvedPaths: 1 };
   const actualMft = await builders[0].finish(summary, 50, new AbortController().signal);
   const originalResult = await builders[1].finish(summary, 50);
-  assert.deepEqual(actualMft, originalResult);
+  assert.deepEqual(withoutScanStart(actualMft), originalResult);
   assert.equal(actualMft.totalSizeBytes, 14);
 });
 
@@ -142,7 +150,7 @@ test('MFT directory records reuse placeholders without changing IDs, casing, fil
   const current = createTreeBuilder('C:\\', filters);
   const original = baseline.createTreeBuilder('C:\\', filters);
   for (const record of records) { current.addRecord(record); original.addRecord(record); }
-  assert.deepEqual(await current.finish({}, 1), await original.finish({}, 1));
+  assert.deepEqual(withoutScanStart(await current.finish({}, 1)), await original.finish({}, 1));
 });
 
 test('MFT canonical-path fast import matches baseline for normalized, device, mixed-case and excluded paths', async () => {
@@ -169,7 +177,7 @@ test('MFT canonical-path fast import matches baseline for normalized, device, mi
       const current = createTreeBuilder(root, filters);
       const original = baseline.createTreeBuilder(root, filters);
       for (const record of records) { current.addRecord(record); original.addRecord(record); }
-      assert.deepEqual(await current.finish({}, 1), await original.finish({}, 1));
+      assert.deepEqual(withoutScanStart(await current.finish({}, 1)), await original.finish({}, 1));
     }
   }
 });

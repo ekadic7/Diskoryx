@@ -29,7 +29,7 @@ test('another launch exits without opening a second window; existing minimized w
       static getAllWindows() { return existing ? [existing] : []; }
     }
     vm.runInNewContext(fs.readFileSync(path.join(root, 'main.js'), 'utf8'), {
-      __dirname: root, process, console, setImmediate, AbortController,
+      __dirname: root, process, console, setImmediate, setTimeout, clearTimeout, AbortController,
       require(name) {
         if (name === 'electron') return {
           app: {

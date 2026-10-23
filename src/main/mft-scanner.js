@@ -320,6 +320,7 @@ async function finalizeScan(options) {
     node.fileCount = 0;
     node.folderCount = 0;
     node.extensionStats = Object.create(null);
+    if ((++work % FINALIZE_YIELD_INTERVAL) === 0) await yieldToEventLoop(signal);
   }
 
   const largestFiles = [];
@@ -352,6 +353,7 @@ async function finalizeScan(options) {
       current.fileCount += value.fileCount;
       current.totalSizeBytes += value.totalSizeBytes;
       current.oldFilesCount += value.oldFilesCount;
+      if ((++work % FINALIZE_YIELD_INTERVAL) === 0) await yieldToEventLoop(signal);
     }
     if ((++work % FINALIZE_YIELD_INTERVAL) === 0) await yieldToEventLoop(signal);
   }
@@ -365,6 +367,7 @@ async function finalizeScan(options) {
   return {
     success: true,
     folderPath,
+    scanStartedAt: scanTimestamp,
     scanFilters: normalizeScanFilters(scanFilters),
     folderNodes,
     fileNodes,
@@ -636,4 +639,4 @@ async function scanMftVolume(folderPath, onProgress, scanFilters = {}, isPackage
   });
 }
 
-module.exports = { createTreeBuilder, getMftScannerPath, isDriveRoot, scanMftVolume };
+module.exports = { createTreeBuilder, finalizeScan, getMftScannerPath, isDriveRoot, scanMftVolume };

@@ -115,6 +115,15 @@ test('previously saved scan filters remain available after the profile migration
   });
 });
 
+test('drive chooser shows each drive letter once', async () => {
+  const ui = loadUI({
+    async listDrives() { return { drives: [{ path: 'C:\\', label: 'C:' }, { path: 'D:\\', label: 'D:' }] }; }
+  }, true);
+  await ui.get('choose-drives-btn').click();
+  const names = ui.get('drive-checklist').children.map(label => label.children[1].textContent);
+  assert.deepEqual(names, ['C:', 'D:']);
+});
+
 test('selected drives scan sequentially, block duplicate requests and keep the last completed result on Stop', async () => {
   const pending = deferred();
   const requests = [];

@@ -136,3 +136,55 @@ test('only user folder activation notifies reverse synchronization, not automati
   MapView.prototype.activateTile.call(instance, { kind: 'file', item: file });
   assert.equal(selected[1], file);
 });
+
+test('treemap regroups until no visible tile is below the minimum size', () => {
+  // A squeezed layout: each tile's width shrinks as more items are laid out, like a narrow column.
+  const squeeze = (items, width) => {
+    const total = items.reduce((sum, node) => sum + node.value, 0);
+    let x = 0;
+    return items.map((node) => {
+      const w = Math.max(1, Math.round(width * node.value / total));
+      const out = { data: node.data, value: node.value, x0: x, x1: x + w, y0: 0, y1: 300 };
+      x += w;
+      return out;
+    });
+  };
+  const context = { window: { d3: {
+    hierarchy: (data) => {
+      const root = { children: data.children.map((item) => ({ data: item, value: item.layoutValue ?? item.value })) };
+      root.sum = () => root;
+      return root;
+    },
+    treemap: () => {
+      let size = [0, 0];
+      const api = (root) => {
+        const children = squeeze(root.children.map((child) => ({ data: child.data, value: child.value })), size[0]);
+        root.children = children;
+        return root;
+      };
+      api.tile = () => api;
+      api.size = (s) => { size = s; return api; };
+      api.paddingOuter = () => api; api.paddingInner = () => api; api.paddingTop = () => api; api.round = () => api;
+      return api;
+    },
+    treemapSquarify: () => {}
+  } } };
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'treemap.js'), 'utf8');
+  vm.runInNewContext(source + '\nglobalThis.Map = DiskTreemap;', context);
+  const Map = context.Map;
+  const sizes = [60, 30, 8, 1, 1, 1, 1];
+  const page = { items: sizes.map((rawSize, i) => ({ type: 'folder', name: `d${i}`, rawSize })), otherSize: 0 };
+  const instance = Object.create(Map.prototype);
+  Object.assign(instance, {
+    frames: [{ rawSize: 101, pages: [page] }], smallItemsMode: false, groupedItems: [],
+    container: { clientWidth: 500, clientHeight: 300, replaceChildren() {}, append() {} },
+    smallItemsButton: {}, formatSize: (value) => String(value), colorForExtension: () => '#000',
+    updateSmallItemsButton() {}, drawLayout(root) { this.drawn = root; }
+  });
+  instance.renderTiles();
+  assert.ok(instance.drawn, 'layout should be drawn');
+  for (const node of instance.drawn.children) {
+    if (node.data.kind === 'small-group') continue;
+    assert.ok(node.x1 - node.x0 >= 72, `tile ${node.data.name} is narrower than the minimum`);
+  }
+});

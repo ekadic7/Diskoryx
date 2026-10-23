@@ -21,11 +21,12 @@ async function fixture(t) {
 
 function loadMain(directory, confirmation, recycle, saveDialog, overrides = {}) {
   const handlers = new Map();
+  const liveState = { options: null };
   let scanCalls = 0;
   const appRoot = path.join(__dirname, '..', 'src', 'main');
   const rootRequire = createRequire(path.join(appRoot, 'main.js'));
   vm.runInNewContext(fsSync.readFileSync(path.join(appRoot, 'main.js'), 'utf8'), {
-    __dirname: appRoot, process, console: { ...console, warn() {} }, setImmediate, AbortController,
+    __dirname: appRoot, process, console: { ...console, warn() {} }, setImmediate, setTimeout, clearTimeout, AbortController,
     require(name) {
       if (name === 'electron') return {
         app: { getPath: () => directory, setPath() {}, setAppUserModelId() {}, whenReady: () => ({ then() {} }), on() {} },
@@ -42,7 +43,10 @@ function loadMain(directory, confirmation, recycle, saveDialog, overrides = {}) 
         ...rootRequire(name),
         scanFolder(...args) { scanCalls++; return rootRequire(name).scanFolder(...args); }
       };
-      if (name === './live-updates') return { createLiveMonitor: () => ({ start: () => true, stop() {} }) };
+      if (name === './live-updates') return { createLiveMonitor: options => {
+        liveState.options = options;
+        return { start: () => true, stop() {} };
+      } };
       return overrides[name] || rootRequire(name);
     }
   });
@@ -53,7 +57,7 @@ function loadMain(directory, confirmation, recycle, saveDialog, overrides = {}) 
     Promise.resolve(confirmation({}, { defaultId: 0, cancelId: 0 })).then(result =>
       handlers.get('confirm-recycle')({ sender }, request.requestId, result.response === 1));
   };
-  return { handlers, event: { sender }, get scanCalls() { return scanCalls; } };
+  return { handlers, event: { sender }, get liveOptions() { return liveState.options; }, get scanCalls() { return scanCalls; } };
 }
 
 test('Windows names reject path escapes, streams and reserved devices', () => {
@@ -328,6 +332,24 @@ test('copy/paste inserts a file into cached totals and supports verified undo/re
   assert.equal(main.scanCalls, 1);
 });
 
+test('live watcher ignores Copy staging items so a successful Paste is not reported as an external change', async t => {
+  const { root, selected, file } = await fixture(t);
+  const main = loadMain(root, async () => ({ response: 1 }), async () => {});
+  const updates = [];
+  const scan = await main.handlers.get('scan-folder')(main.event, selected, {}, 1);
+  main.event.sender.send = (channel, payload) => { if (channel === 'live-update') updates.push(payload); };
+  const copied = await main.handlers.get('copy-item')(main.event, file, scan.scanId, 'copy');
+  assert.equal(copied.success, true, copied.error);
+  const pasted = await main.handlers.get('paste-item')(main.event, scan.scanId, 0);
+  assert.equal(pasted.success, true, pasted.error);
+  const staged = path.join(selected, '.diskoryx-copy-0123456789abcdef');
+  await main.liveOptions.onBatch([path.join(staged, 'one.txt'), path.join(staged, 'nested', 'a.txt')], () => true);
+  assert.equal(updates.filter(update => update.snapshotChanged).length, 0, 'Copy staging events must not raise a change notice');
+  await fs.writeFile(path.join(selected, 'external.txt'), 'outside');
+  await main.liveOptions.onBatch([path.join(selected, 'external.txt')], () => true);
+  assert.equal(updates.filter(update => update.snapshotChanged).length, 1, 'real external changes must still be reconciled');
+});
+
 test('undo copy refuses edited or replacement contents without recycling user changes', async t => {
   const { root, selected, file } = await fixture(t);
   const destination = path.join(selected, 'destination');
@@ -366,6 +388,25 @@ test('in-app Paste requires a current scanned folder ID and never opens a native
   assert.equal(pasted.success, true, pasted.error);
   assert.equal(path.basename(pasted.path), 'one - Copy.txt');
   assert.equal(await fs.readFile(file, 'utf8'), 'original');
+  assert.equal(main.scanCalls, 1);
+});
+
+test('a successful Copy Paste clears the pending copy selection, and a failed Paste keeps it for retry', async t => {
+  const { root, selected, file } = await fixture(t);
+  const main = loadMain(root);
+  const scan = await main.handlers.get('scan-folder')(main.event, selected, {}, 1);
+  await main.handlers.get('copy-item')(main.event, file, scan.scanId);
+  const pasted = await main.handlers.get('paste-item')(main.event, scan.scanId, 0);
+  assert.equal(pasted.success, true, pasted.error);
+  assert.equal(await fs.readFile(file, 'utf8'), 'original');
+  const reused = await main.handlers.get('paste-item')(main.event, pasted.scanId, 0);
+  assert.match(reused.error, /Use Copy/);
+  await main.handlers.get('copy-item')(main.event, file, pasted.scanId);
+  const refused = await main.handlers.get('paste-item')(main.event, pasted.scanId + 1, 0);
+  assert.match(refused.error, /scan changed/);
+  const again = await main.handlers.get('paste-item')(main.event, pasted.scanId, 0);
+  assert.equal(again.success, true, again.error);
+  assert.equal(path.basename(again.path), 'one - Copy (2).txt');
   assert.equal(main.scanCalls, 1);
 });
 
@@ -436,6 +477,7 @@ test('Copy into the same folder chooses numbered names without overwrite and His
   const first = await main.handlers.get('paste-item')(main.event, scan.scanId, 0);
   assert.equal(first.success, true, first.error);
   assert.equal(path.basename(first.path), 'one - Copy.txt');
+  await main.handlers.get('copy-item')(main.event, file, first.scanId);
   const second = await main.handlers.get('paste-item')(main.event, first.scanId, 0);
   assert.equal(second.success, true, second.error);
   assert.equal(path.basename(second.path), 'one - Copy (2).txt');

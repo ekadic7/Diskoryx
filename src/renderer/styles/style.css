@@ -879,8 +879,9 @@ summary:focus-visible {
 .action-toast {
   position: fixed;
   z-index: 30;
-  right: 18px;
-  bottom: 48px;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 56px;
   max-width: min(420px, calc(100vw - 36px));
   padding: 10px 14px;
   border: 1px solid #63816d;

@@ -23,6 +23,7 @@
     <button class="nav-item is-active" type="button" data-view="explorer" aria-pressed="true"><i class="fas fa-layer-group" aria-hidden="true"></i> Disk overview</button>
     <button class="nav-item" type="button" data-view="largest" aria-pressed="false"><i class="fas fa-file" aria-hidden="true"></i> Largest files</button>
     <button class="nav-item" type="button" data-view="types" aria-pressed="false"><i class="fas fa-chart-pie" aria-hidden="true"></i> File types</button>
+    <button class="nav-item" type="button" data-view="duplicates" aria-pressed="false"><i class="fas fa-copy" aria-hidden="true"></i> Duplicate finder</button>
     <button id="history-btn" class="nav-item" type="button"><i class="fas fa-clock-rotate-left" aria-hidden="true"></i> History</button>
     <div class="sidebar-heading"><span class="sidebar-label">SCAN LOCATION</span><i class="fas fa-hard-drive" aria-hidden="true"></i></div>
     <div class="location-card">
@@ -46,14 +47,6 @@
         <span>Optional support via PayPal on Ko-fi.</span>
         <span>Opens your browser. Diskoryx stays offline.</span>
       </section>
-      <section id="disk-capacity-card" class="disk-capacity-card" hidden aria-label="Current drive capacity">
-        <div class="disk-capacity-heading"><i class="fas fa-hard-drive" aria-hidden="true"></i><span>Free space</span><strong id="capacity-volume"></strong></div>
-        <strong id="capacity-free">Checking...</strong>
-        <span id="capacity-total">Available on this volume</span>
-        <div id="capacity-track" role="progressbar" aria-label="Drive space used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-          <span id="capacity-fill"></span>
-        </div>
-      </section>
       <button id="theme-toggle" class="nav-item" type="button" aria-label="Switch to light theme"><i class="fas fa-circle-half-stroke" aria-hidden="true"></i><span>Light appearance</span></button>
     </div>
   </aside>
@@ -69,9 +62,18 @@
       <input type="text" id="search-input" placeholder="Find a file in this scan..." autocomplete="off" aria-label="Search scanned files">
       <kbd>Ctrl K</kbd>
       <button id="search-btn" title="Search" aria-label="Search"><i class="fas fa-arrow-right" aria-hidden="true"></i></button>
+      <button id="search-filter-btn" type="button" title="Add a size or date filter to the search" aria-label="Add search filter" aria-haspopup="dialog"><i class="fas fa-filter" aria-hidden="true"></i></button>
     </div>
+    <div id="search-filter-chips" class="search-filter-chips" aria-label="Active search filters" hidden></div>
     
     <div class="header-right">
+      <div class="scan-menu">
+        <button id="scan-menu-btn" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="scan-menu" title="Save or open a scan"><i class="fas fa-floppy-disk" aria-hidden="true"></i> Scan <i class="fas fa-chevron-down" aria-hidden="true"></i></button>
+        <div id="scan-menu" class="scan-menu-list" role="menu" hidden>
+          <button id="save-scan-btn" type="button" role="menuitem" disabled title="Save this completed scan to a local file"><i class="fas fa-floppy-disk" aria-hidden="true"></i> Save scan</button>
+          <button id="open-scan-btn" type="button" role="menuitem" title="Open a scan saved earlier"><i class="fas fa-folder-open" aria-hidden="true"></i> Open scan</button>
+        </div>
+      </div>
       <button id="refresh-btn" title="Rescan location" aria-label="Rescan location"><i class="fas fa-rotate" aria-hidden="true"></i></button>
       <button id="export-csv-btn" type="button" title="Export the complete tree of the selected scan to CSV" disabled><i class="fas fa-arrow-up-from-bracket" aria-hidden="true"></i> Export</button>
       <button id="inspector-toggle" type="button" title="Toggle inspector" aria-label="Toggle inspector" aria-expanded="true"><i class="fas fa-table-columns" aria-hidden="true"></i></button>
@@ -79,13 +81,38 @@
   </header>
 
   <section class="scan-overview" aria-label="Scan overview">
-    <div class="location-line"><span><i class="fas fa-hard-drive" aria-hidden="true"></i><span id="location-label">No location selected</span></span><span class="local-tag"><span></span> On-device analysis</span></div>
+    <div class="location-line"><span><i class="fas fa-hard-drive" aria-hidden="true"></i><span id="location-label">No location selected</span><span id="archive-badge" class="archive-badge" role="status" hidden></span></span><span class="local-tag"><span></span> On-device analysis</span></div>
+    <div id="volume-capacity" class="volume-capacity" role="status" aria-label="Volume capacity" hidden></div>
     <div class="metric-grid">
       <article class="metric-card featured"><div class="metric-label"><i class="fas fa-chart-pie" aria-hidden="true"></i> Scanned size</div><strong id="metric-size">--</strong><span>Logical file size</span><div class="metric-decoration" aria-hidden="true"></div></article>
       <article class="metric-card"><div class="metric-label"><i class="far fa-file" aria-hidden="true"></i> Files discovered</div><strong id="metric-files">--</strong><span id="metric-folders">Choose a drive to begin</span></article>
       <article class="metric-card"><div class="metric-label"><i class="fas fa-stopwatch" aria-hidden="true"></i> Scan duration</div><strong id="metric-duration">--</strong><span id="metric-rate">Measured after scanning</span></article>
       <article class="metric-card"><div class="metric-label"><i class="fas fa-filter" aria-hidden="true"></i> Scan coverage</div><strong id="metric-skipped">--</strong><span id="metric-coverage">Skipped entries</span></article>
     </div>
+  </section>
+  <section id="archive-bar" class="archive-bar" aria-label="Saved scan" hidden>
+    <div class="archive-bar-info"><span id="archive-bar-time"></span><span class="archive-bar-readonly">READ-ONLY</span></div>
+    <button id="compare-scan-btn" type="button" hidden title="Compare this saved scan with the current state of its location"><i class="fas fa-code-compare" aria-hidden="true"></i> Compare with current state</button>
+  </section>
+  <section id="compare-view" class="compare-view" aria-live="polite" aria-label="Compare with current state" hidden>
+    <div class="compare-view-header">
+      <h2>Compared with current state <span class="archive-bar-readonly">READ-ONLY</span></h2>
+      <button id="compare-back-btn" type="button"><i class="fas fa-arrow-left" aria-hidden="true"></i> Back to overview</button>
+    </div>
+    <div id="compare-times" class="compare-times"></div>
+    <div id="compare-counts" class="compare-counts"></div>
+    <p id="compare-identity" class="compare-identity" role="alert" hidden></p>
+    <div class="compare-filters">
+      <label>Change
+        <select id="compare-kind"><option value="added">Added</option><option value="removed">Removed</option><option value="changed">Changed</option></select>
+      </label>
+      <label>Search path<input id="compare-query" type="search" maxlength="512" placeholder="Name or path"></label>
+      <label>Sort
+        <select id="compare-sort"><option value="path">Path</option><option value="size">Size change</option><option value="delta">Delta</option></select>
+      </label>
+    </div>
+    <div class="compare-scroll"><table class="compare-table"><thead><tr><th>Path</th><th>Change</th></tr></thead><tbody id="compare-rows"></tbody></table></div>
+    <div class="compare-pager"><span id="compare-page-info"></span><button id="compare-prev" type="button">Previous</button><button id="compare-next" type="button">Next</button></div>
   </section>
   <section id="analysis-panel" class="analysis-panel" hidden aria-labelledby="analysis-title">
     <div class="section-header"><h2 id="analysis-title">Largest files</h2><span id="analysis-count" role="status"></span></div>
@@ -100,6 +127,21 @@
     <div id="largest-chart" class="largest-chart" aria-label="Largest files on this page, relative logical sizes" hidden></div>
     <div class="analysis-scroll"><table class="analysis-table"><thead id="analysis-head"></thead><tbody id="analysis-rows"></tbody></table></div>
     <button id="analysis-more" type="button" hidden>Load next 100</button>
+  </section>
+  <section id="duplicates-panel" class="analysis-panel duplicates-panel" hidden aria-labelledby="duplicates-title">
+    <div class="section-header"><h2 id="duplicates-title">Duplicate finder</h2><span id="duplicates-count" role="status">Choose a drive to start duplicate analysis.</span></div>
+    <details class="duplicates-info"><summary>Info: how duplicate analysis works</summary><p id="duplicates-note">Choose a local drive. User files excludes Windows, Program Files, ProgramData, AppData, the Recycle Bin and System Volume Information. Choose Entire drive to include them. A completed full-drive scan is reused without scanning directories again; otherwise a full inventory is needed. Analysis filters by size, compares small samples, then reads candidate file contents fully to confirm matches. Windows may download online-only cloud files. No files are changed or deleted.</p><p>Matching contents can have different names. Windows Installer caches and application files may be required. Logical bytes in extra copies are not an estimate of physical disk space freed.</p></details>
+    <p id="duplicates-safety-note">Identical contents do not mean a file is safe to remove.</p>
+    <div class="duplicate-controls"><label for="duplicates-drive-select">Drive</label><select id="duplicates-drive-select" aria-label="Choose drive for duplicate analysis" disabled><option value="">Loading drives...</option></select><label for="duplicates-scope-select">Include</label><select id="duplicates-scope-select" aria-label="Duplicate analysis scope"><option value="user" selected>User files (recommended)</option><option value="all">Entire drive (includes system files)</option></select><button id="find-duplicates-btn" type="button" disabled><i class="fas fa-magnifying-glass" aria-hidden="true"></i> Find duplicates</button><span id="duplicates-status" role="status" aria-live="polite"></span></div>
+    <p id="duplicates-error" role="alert" hidden></p>
+    <div id="duplicates-results" class="duplicates-results" hidden>
+      <div class="duplicates-metrics"><div><span>Extra copies (logical)</span><strong id="duplicates-bytes">0 B</strong></div><div><span>Duplicate groups</span><strong id="duplicates-groups">0</strong></div><div><span>Files checked</span><strong id="duplicates-files">0</strong></div></div>
+      <div class="duplicates-chart-heading"><strong>Largest duplicate groups</strong><span>Extra logical bytes · click a bar for paths</span></div>
+      <div id="duplicates-chart" class="duplicates-chart" aria-label="Top 10 duplicate groups by extra logical bytes"></div>
+      <div class="duplicate-controls"><label for="duplicates-query">Search</label><input id="duplicates-query" type="search" placeholder="File name or path" aria-label="Search duplicate file paths"><label for="duplicates-sort">Sort</label><select id="duplicates-sort"><option value="bytes">Extra bytes</option><option value="copies">Copies</option><option value="name">File name</option></select></div>
+      <table class="analysis-table duplicates-table"><thead><tr><th>Copies</th><th>Size per copy</th><th>Extra logical bytes</th><th>Files</th></tr></thead><tbody id="duplicates-rows"></tbody></table>
+      <div class="duplicate-controls duplicates-paging"><button id="duplicates-prev" type="button">Previous</button><span id="duplicates-page" role="status"></span><button id="duplicates-next" type="button">Next</button></div>
+    </div>
   </section>
   <!-- Main Content Area -->
   <main class="app-content">
@@ -302,6 +344,40 @@
     </form>
   </dialog>
 
+  <dialog id="save-archive-dialog" class="rename-dialog archive-dialog" aria-labelledby="save-archive-title" aria-describedby="save-archive-note">
+    <h2 id="save-archive-title">Save this scan to a file?</h2>
+    <p id="save-archive-note">The saved scan file stores this result's folder names, file names, full paths, sizes and dates. It never includes file contents, and Diskoryx does not send it anywhere. Keep it somewhere you trust; anyone who can open it can read those names and paths.</p>
+    <p id="save-archive-location" class="archive-dialog-meta"></p>
+    <div class="rename-actions">
+      <button id="save-archive-cancel" type="button" autofocus>Cancel</button>
+      <button id="save-archive-confirm" type="button"><i class="fas fa-floppy-disk" aria-hidden="true"></i> Save scan file...</button>
+    </div>
+  </dialog>
+
+  <dialog id="search-filter-dialog" class="rename-dialog search-filter-dialog">
+    <form id="search-filter-form">
+      <h2>Search filter</h2>
+      <fieldset class="search-filter-group">
+        <legend>Size</legend>
+        <select id="size-operator" aria-label="Size operator"><option value=">">more than</option><option value=">=">at least</option><option value="<">less than</option><option value="<=">at most</option></select>
+        <input id="size-value" type="text" inputmode="decimal" placeholder="10" aria-label="Size amount">
+        <select id="size-unit" aria-label="Size unit"><option>KB</option><option selected>MB</option><option>GB</option><option>TB</option></select>
+      </fieldset>
+      <fieldset class="search-filter-group">
+        <legend>Modified</legend>
+        <select id="modified-operator" aria-label="Modified operator"><option value=">=">on or after</option><option value=">">after</option><option value="<=">on or before</option><option value="<">before</option></select>
+        <input id="modified-value" type="date" aria-label="Modified date (UTC)">
+      </fieldset>
+      <p class="scan-filters-note">Dates are compared in UTC. The filter is added at the end of the search text; your text is not changed.</p>
+      <p class="search-filter-preview">Query: <code id="search-filter-preview"></code></p>
+      <p id="search-filter-error" class="rename-error" hidden></p>
+      <div class="rename-actions">
+        <button id="cancel-search-filter" type="button">Cancel</button>
+        <button id="apply-search-filter" type="submit">Add filter</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="scan-filters-dialog" class="rename-dialog scan-filters-dialog">
     <form id="scan-filters-form">
       <h2>Scan filters</h2>
@@ -343,9 +419,12 @@
   <script src="virtual-tree.js"></script>
   <script src="treemap.js"></script>
   <script src="app.js"></script>
+  <script src="search-filters.js"></script>
+  <script src="search-filter-ui.js"></script>
   <script src="drive-scans.js"></script>
   <script src="design.js"></script>
   <script src="analysis.js"></script>
+  <script src="duplicates-ui.js"></script>
   <script src="history.js"></script>
   <script src="copy.js"></script>
   <script src="destination.js"></script>

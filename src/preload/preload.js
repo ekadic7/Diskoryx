@@ -9,6 +9,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 	listSavedScans: () => ipcRenderer.invoke('list-saved-scans'),
 	activateSavedScan: (folderPath) => ipcRenderer.invoke('activate-saved-scan', folderPath),
 	showFolderDialog: () => ipcRenderer.invoke('show-folder-dialog'),
+	saveScanArchive: (scanId) => ipcRenderer.invoke('save-scan-archive', scanId),
+	openScanArchive: (requestId) => ipcRenderer.invoke('open-scan-archive', requestId),
+	compareWithCurrent: (requestId) => ipcRenderer.invoke('compare-with-current', requestId),
+	comparePage: (kind, options) => ipcRenderer.invoke('compare-page', kind, options),
+	findDuplicates: (drivePath, requestId, scope) => ipcRenderer.invoke('find-duplicates', drivePath, requestId, scope),
 	refreshTree: (folderPath, scanFilters, requestId) => ipcRenderer.invoke('refresh-tree', folderPath, scanFilters, requestId),
 	getFolderPage: (scanId, folderId, offset, limit, sortType, extensions, scanFilters) => ipcRenderer.invoke('get-folder-page', scanId, folderId, offset, limit, sortType, extensions, scanFilters),
 	getFolderAncestors: (scanId, folderId, extensions, scanFilters) => ipcRenderer.invoke('get-folder-ancestors', scanId, folderId, extensions, scanFilters),
@@ -52,6 +57,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
 		const listener = (_event, requestId) => callback(requestId);
 		ipcRenderer.on('recycle-confirmation-closed', listener);
 		return () => ipcRenderer.removeListener('recycle-confirmation-closed', listener);
+	},
+	onDuplicateProgress: (callback) => {
+		const listener = (_event, progress) => callback(progress);
+		ipcRenderer.on('duplicate-progress', listener);
+		return () => ipcRenderer.removeListener('duplicate-progress', listener);
 	},
 	onScanProgress: (callback) => {
 		const listener = (_event, progress) => callback(progress);

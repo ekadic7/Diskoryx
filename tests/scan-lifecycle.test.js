@@ -34,7 +34,7 @@ function loadMain(scanFolder, scanMftVolume = async () => null, overrides = {}) 
   const warnings = [];
   let live;
   vm.runInNewContext(fs.readFileSync(path.join(root, 'main.js'), 'utf8'), {
-    __dirname: root, process, setImmediate, AbortController,
+    __dirname: root, process, setImmediate, setTimeout, clearTimeout, AbortController,
     console: { ...console, warn: message => warnings.push(message), error() {} },
     require(name) {
       if (name === 'electron') return {
@@ -151,6 +151,7 @@ test('saved locations survive cancelled or failed scans and cannot switch during
 
 test('main admits one scan, matches cancellation owner/token and drains before allowing another', async () => {
   const pending = deferred();
+  const started = deferred();
   let calls = 0;
   let signal;
   let report;
@@ -158,12 +159,14 @@ test('main admits one scan, matches cancellation owner/token and drains before a
     calls++;
     signal = abortSignal;
     report = progress;
+    started.resolve();
     return pending.promise;
   });
   const scan = main.handlers.get('scan-folder');
   const refresh = main.handlers.get('refresh-tree');
   const cancel = main.handlers.get('cancel-scan');
   const first = scan(main.event, 'C:\\first', {}, 1);
+  await started.promise;
   assert.equal(calls, 1);
   assert.match((await scan(main.event, 'C:\\second', {}, 2)).error, /already running/);
   assert.match((await refresh(main.event, 'C:\\second', {}, 2)).error, /already running/);
@@ -189,6 +192,7 @@ test('main admits one scan, matches cancellation owner/token and drains before a
 
 test('cancelled MFT scan never starts filesystem fallback and previous completed scan survives', async () => {
   const pending = deferred();
+  const started = deferred();
   let standardCalls = 0;
   let mftCalls = 0;
   const main = loadMain(async folder => {
@@ -197,12 +201,14 @@ test('cancelled MFT scan never starts filesystem fallback and previous completed
   }, (_folder, _progress, _filters, _packaged, signal) => {
     mftCalls++;
     signal.addEventListener('abort', () => pending.reject(signal.reason), { once: true });
+    started.resolve();
     return pending.promise;
   });
   const scan = main.handlers.get('scan-folder');
   const previous = await scan(main.event, 'C:\\previous', {}, 1);
   assert.equal(previous.success, true);
   const inFlight = scan(main.event, 'C:\\', {}, 2);
+  await started.promise;
   assert.equal(mftCalls, 1);
   main.handlers.get('cancel-scan')(main.event, 2);
   assert.equal((await inFlight).cancelled, true);
@@ -320,15 +326,16 @@ test('file mutation IPC refuses requests without an active scan before filesyste
 
 test('stop during initial view preparation does not publish the new cache', async () => {
   const sorting = deferred();
+  const sortingStarted = deferred();
   let calls = 0;
   const main = loadMain(async folder => {
     calls++;
     return scanResult(folder);
   }, undefined, {
-    './tree-sort': { sortItemList: () => sorting.promise }
+    './tree-sort': { sortItemList: () => { sortingStarted.resolve(); return sorting.promise; } }
   });
   const running = main.handlers.get('scan-folder')(main.event, 'C:\\test', {}, 1);
-  await tick();
+  await sortingStarted.promise;
   assert.equal(main.handlers.get('cancel-scan')(main.event, 1).success, true);
   sorting.resolve([]);
   assert.equal((await running).cancelled, true);

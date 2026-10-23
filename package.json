@@ -1,6 +1,6 @@
 {
   "name": "diskoryx",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "license": "MIT",
   "private": true,
   "main": "src/main/main.js",
@@ -8,9 +8,11 @@
     "start": "electron .",
     "test": "node --test",
     "test:smoke": "node scripts/smoke.cjs",
+    "cli": "node src/main/cli.js",
     "build:file-actions": "node scripts/build-file-actions.cjs",
     "build:scan-broker": "node scripts/build-scan-broker.cjs",
-    "build:installer:win": "npm run build:file-actions && npm run build:scan-broker && node scripts/check-installer-inputs.cjs && node scripts/build-installer.cjs"
+    "build:installer:win": "npm run build:file-actions && npm run build:scan-broker && node scripts/check-installer-inputs.cjs && node scripts/build-installer.cjs",
+    "build:release:win": "npm run build:file-actions && npm run build:scan-broker && node scripts/check-installer-inputs.cjs && node scripts/build-installer.cjs --portable"
   },
   "devDependencies": {
     "electron": "^44.7.2",
@@ -56,6 +58,9 @@
         }
       ],
       "artifactName": "Diskoryx-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "Diskoryx-Portable-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,

@@ -39,7 +39,9 @@ document.getElementById('choose-drives-btn').addEventListener('click', async () 
       checkbox.value = drive.path;
       checkbox.checked = selectedDrivePaths.length ? selectedDrivePaths.includes(drive.path) : drive.path === driveSelect.value;
       const name = document.createElement('span');
-      name.textContent = `${drive.label} (${drive.path})`;
+      name.textContent = drive.path.replace(/\\$/, '').toUpperCase() === drive.label.toUpperCase()
+        ? drive.label
+        : `${drive.label} (${drive.path})`;
       label.append(checkbox, name);
       driveChecklist.append(label);
     }
@@ -103,9 +105,9 @@ async function updateSavedScans() {
       const option = document.createElement('option');
       option.value = scan.folderPath;
       const label = /^[A-Za-z]:\\$/.test(scan.folderPath)
-        ? scan.folderPath : `${scan.folderPath.replace(/\\$/, '').split('\\').at(-1)} (${scan.folderPath.slice(0, 2)})`;
-      option.textContent = `${label} - ${scan.fileCount.toLocaleString()} files`;
-      option.title = scan.folderPath;
+        ? `Drive ${scan.folderPath.slice(0, 2)}` : `${scan.folderPath.replace(/\\$/, '').split('\\').at(-1)} (${scan.folderPath.slice(0, 2)})`;
+      option.textContent = scan.readOnly ? `${label} · saved scan` : label;
+      option.title = scan.readOnly ? `${scan.folderPath} (saved scan, read-only)` : scan.folderPath;
       option.selected = scan.active;
       savedScansSelect.append(option);
       if (scan.active) savedScansSelect.title = scan.folderPath;

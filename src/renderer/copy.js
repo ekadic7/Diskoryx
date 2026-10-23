@@ -4,6 +4,7 @@ const copyCancel = document.getElementById('copy-cancel');
 let copiedItemName = null;
 let copiedItemPath = null;
 let transferMode = 'copy';
+let copySelectionToken = 0;
 
 function updatePasteAvailability() {
   const busy = scanInProgress || fileActionInProgress;
@@ -27,7 +28,8 @@ function updatePasteAvailability() {
 
 async function pasteIntoFolder(folderId, scanId = currentScanId) {
   if (!copiedItemName) { showAppMessage('Choose Copy or Move on a file or folder first.'); return; }
-  await runCopyOperation(() => window.electronAPI.pasteItem(scanId, folderId));
+  const token = copySelectionToken;
+  await runCopyOperation(() => window.electronAPI.pasteItem(scanId, folderId), token);
 }
 
 function showFolderPasteMenu(event) {
@@ -47,26 +49,26 @@ function showFolderPasteMenu(event) {
   fileContextMenu.querySelector('[data-file-action="create-folder"]').focus();
 }
 
-async function handleCopyResult(result) {
+async function handleCopyResult(result, token) {
   if (result.refreshRequired) invalidateFileActionView();
   if (result.cancelled) { showActionToast('Transfer cancelled; original unchanged'); return; }
   if (!result.success) throw new Error(result.error || 'Copy did not complete.');
-  if (result.moved) copiedItemName = null;
-  if (result.snapshotChanged) await refreshAfterFileAction(result);
+  if (token !== undefined && token === copySelectionToken) { copiedItemName = null; copiedItemPath = null; }
+  if (result.snapshotChanged) await refreshAfterFileAction(result, { successDialog: true });
   else {
-    showActionToast(result.actionLabel || 'Item copied outside this scan');
+    showSuccessDialog(result.actionLabel || 'Item copied outside this scan', 'Copied successfully');
     if (result.historyWarning) showAppMessage(result.historyWarning, 'Action completed; check history');
   }
 }
 
-async function runCopyOperation(operation) {
+async function runCopyOperation(operation, token) {
   if (scanInProgress || fileActionInProgress) return;
   setFileActionBusy(true);
   document.getElementById('copy-title').textContent = 'Transfer file / folder';
   copyStatus.textContent = 'Preparing transfer and verifying paths...';
   copyCancel.disabled = false;
   copyDialog.showModal();
-  try { await handleCopyResult(await operation()); }
+  try { await handleCopyResult(await operation(), token); }
   catch (error) { showAppMessage(error.message, 'Transfer not completed'); }
   finally { copyDialog.close(); setFileActionBusy(false); updatePasteAvailability(); }
 }

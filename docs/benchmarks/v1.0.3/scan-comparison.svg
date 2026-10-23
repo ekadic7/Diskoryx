@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="370" viewBox="0 0 1000 370" role="img" aria-labelledby="title description">
+  <title id="title">Diskoryx median scan and indexing time: v1.0.1 versus v1.0.3</title>
+  <desc id="description">Three repeated real C drive MFT scans per version on the same machine. Median time decreased from 7.951 seconds to 4.400 seconds, 44.7 percent lower. OS caches were not flushed. Lower is better.</desc>
+  <rect width="1000" height="370" rx="18" fill="#111218"/>
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <text x="42" y="53" font-size="25" font-weight="700" fill="#f0edf9">Real C: scan. Measured, not estimated.</text>
+    <text x="42" y="84" font-size="14" fill="#a5a2b7">Median of 3 repeated MFT scans per version | Scan + indexing | Lower is better</text>
+    <text x="42" y="148" font-size="18" fill="#ddd9ed">v1.0.1</text>
+    <rect x="160" y="124" width="660" height="40" rx="7" fill="#595568"/>
+    <text x="840" y="150" font-size="20" font-weight="600" fill="#ddd9ed">7.951 s</text>
+    <text x="42" y="220" font-size="18" fill="#ddd9ed">v1.0.3</text>
+    <rect x="160" y="196" width="365.2" height="40" rx="7" fill="#a99af9"/>
+    <text x="545" y="222" font-size="20" font-weight="700" fill="#ddd9ed">4.400 s</text>
+    <text x="42" y="289" font-size="22" font-weight="700" fill="#b9acf9">44.7% less time on this machine</text>
+    <text x="42" y="323" font-size="13" fill="#a5a2b7">~774,500 files | Windows 11 | i7-14650HX | NVMe SSD | NTFS | 2026-10-23</text>
+    <text x="42" y="345" font-size="12" fill="#8f8b9d">Warm/repeated runs, not cold-cache trials. Live volume counts vary. Results are not a universal speed guarantee.</text>
+  </g>
+</svg>

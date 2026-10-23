@@ -97,6 +97,13 @@
     const selected = event.detail;
     const panel = document.querySelector('.file-details-content');
     if (!panel) return;
+    if (typeof currentResult !== 'undefined' && currentResult?.readOnly) {
+      const note = document.createElement('p');
+      note.className = 'preview-unavailable';
+      note.textContent = 'File preview reads the live file, so it is disabled for a saved scan. Use Rescan to read the original location.';
+      panel.prepend(note);
+      return;
+    }
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'open-text-preview';

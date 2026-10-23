@@ -14,8 +14,7 @@
     setFileActionBusy(true);
     try {
       await refreshAfterFileAction({
-        scanId: update.scanId, parentFolderId: 0, item: null,
-        actionLabel: 'External filesystem changes applied'
+        scanId: update.scanId, parentFolderId: 0, item: null, silent: true
       });
     } finally {
       setFileActionBusy(false); applying = false;

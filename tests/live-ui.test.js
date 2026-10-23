@@ -70,6 +70,16 @@ test('live UI waits until a context menu closes and ignores other roots or same 
   assert.equal(ui.refreshed.length, 1);
 });
 
+test('watcher changes refresh the view silently without a success toast', async () => {
+  const ui = loadUI();
+  ui.change(6);
+  await Promise.resolve();
+  assert.equal(ui.refreshed.length, 1);
+  assert.equal(ui.refreshed[0].silent, true, 'external-change refresh must not raise a success toast');
+  assert.equal(ui.refreshed[0].actionLabel, undefined);
+  assert.equal(ui.refreshed[0].scanId, 6);
+});
+
 test('pausing live monitoring keeps snapshot export available and refreshes an unseen committed revision', async () => {
   const ui = loadUI();
   ui.stale(5);

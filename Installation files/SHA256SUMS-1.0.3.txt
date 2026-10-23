@@ -1,0 +1,2 @@
+750da6c6586f647a2c771b73a1caaa3cab8ecea12c0b4c129e195fffa6acc7a2  Diskoryx-Setup-1.0.3.exe
+b7ce1233413bf65c43c33031b3818acb2ffb5055ed4c1609f75a69f0b8892710  Diskoryx-Portable-1.0.3.exe

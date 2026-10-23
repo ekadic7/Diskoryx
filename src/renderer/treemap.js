@@ -230,18 +230,17 @@ class DiskTreemap {
       return;
     }
 
-    const root = this.layoutItems(visibleItems);
+    // Grouping one pass can shrink the remaining tiles (the Small items tile takes space),
+    // so repeat until every ungrouped tile meets the minimum size.
     this.groupedItems = [];
-    for (const node of root.children || []) {
-      if (node.x1 - node.x0 < MIN_TILE_WIDTH || node.y1 - node.y0 < MIN_TILE_HEIGHT) {
-        this.groupedItems.push(node.data);
-      }
-    }
-
-    let layoutRoot = root;
-    if (this.groupedItems.length) {
-      const groupValue = this.groupedItems.reduce((total, item) => total + item.value, 0);
+    let layoutRoot = this.layoutItems(visibleItems);
+    for (;;) {
+      const tooSmall = (layoutRoot.children || []).filter((node) => node.data.kind !== 'small-group' &&
+        (node.x1 - node.x0 < MIN_TILE_WIDTH || node.y1 - node.y0 < MIN_TILE_HEIGHT));
+      if (!tooSmall.length) break;
+      this.groupedItems.push(...tooSmall.map((node) => node.data));
       const groupedData = visibleItems.filter((item) => !this.groupedItems.includes(item));
+      const groupValue = this.groupedItems.reduce((total, item) => total + item.value, 0);
       const visibleTotal = visibleItems.reduce((total, item) => total + item.value, 0);
       const minimumLayoutValue = visibleTotal * SMALL_GROUP_MIN_SHARE / (1 - SMALL_GROUP_MIN_SHARE);
       groupedData.push({

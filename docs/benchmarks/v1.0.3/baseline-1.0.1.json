@@ -1,0 +1,79 @@
+{
+  "version": "1.0.1",
+  "scope": "C:\\",
+  "timestamp": "2026-10-23T15:24:17.014Z",
+  "runtime": {
+    "node": "24.21.0",
+    "acorn": "8.18.0",
+    "ada": "4.0.0",
+    "amaro": "1.1.11",
+    "ares": "1.34.8",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "149",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.70.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.7",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.4",
+    "tz": "2026d",
+    "undici": "7.29.1",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.2.124.37-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "44.7.2",
+    "chrome": "152.0.7977.149"
+  },
+  "pollingMs": 25,
+  "notes": [
+    "Real renderer clicks; native folder dialog supplies fixed scope.",
+    "No scanner, broker or scan data mocks. Isolated app profile; hidden window.",
+    "First request-to-view may include UAC wait. scanMs excludes UAC.",
+    "OS caches are not flushed; sequential repeated runs, not cold-cache measurements."
+  ],
+  "records": [
+    {
+      "files": 774503,
+      "folders": 188089,
+      "countedBytes": 835976259503,
+      "scanMs": 7615.7570000000005,
+      "mode": "mft",
+      "skipped": 0,
+      "resultMs": 13299,
+      "viewReadyMs": 14304.70000000298
+    },
+    {
+      "files": 774503,
+      "folders": 188089,
+      "countedBytes": 835976413134,
+      "scanMs": 8030.738299999999,
+      "mode": "mft",
+      "skipped": 0,
+      "resultMs": 8040.70000000298,
+      "viewReadyMs": 8043.29999999702
+    },
+    {
+      "files": 774503,
+      "folders": 188089,
+      "countedBytes": 835976409958,
+      "scanMs": 7951.3194,
+      "mode": "mft",
+      "skipped": 0,
+      "resultMs": 7961.5999999940395,
+      "viewReadyMs": 7975.29999999702
+    }
+  ],
+  "rendererErrors": [],
+  "httpRequests": []
+}
